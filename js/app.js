@@ -1,0 +1,902 @@
+// ==========================================
+// EarthWatch - Disaster Satellite Monitoring
+// ==========================================
+
+const state = {
+  map: null,
+  basemapLayer: null,
+  gibs_layer: null,
+  center: [20, 0],
+  zoom: 3,
+  bbox: null,           // [west, south, east, north]
+  locationMarker: null,
+  bboxRect: null,
+  drawingMode: false,
+  drawStart: null,
+  drawTempRect: null,
+
+  satellite: 'modis_terra',
+  layer: 'true_color',
+  basemap: 'carto',
+
+  slots: [],            // [{id, label, date}]
+  loadedSlots: [],      // [{id, label, date, imageUrl, satellite, layer}]
+
+  gridCols: 3,
+  imageSize: 768,
+  slotIdCounter: 0,
+
+  compareMode: 'slider',
+};
+
+// ---- Init ----
+document.addEventListener('DOMContentLoaded', () => {
+  initMap();
+  renderSatelliteGrid();
+  renderLayerGrid();
+  setupEventListeners();
+  addDefaultSlots();
+  // Populate initial satellite info
+  const initSat = SATELLITES.find(s => s.id === state.satellite);
+  if (initSat) updateSatInfo(initSat);
+  updateLayerDescription();
+});
+
+// ---- Map ----
+function initMap() {
+  state.map = L.map('location-map', {
+    center: state.center,
+    zoom: state.zoom,
+    zoomControl: true,
+  });
+
+  applyBasemap('carto');
+
+  state.map.on('click', onMapClick);
+  state.map.on('zoomend', onZoomEnd);
+  state.map.on('moveend', onMoveEnd);
+  state.map.on('mousemove', onMouseMove);
+}
+
+const BASEMAPS = {
+  osm: {
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 19
+  },
+  carto: {
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/">CARTO</a>',
+    maxZoom: 19
+  },
+  satellite: {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© <a href="https://www.esri.com/">Esri</a>',
+    maxZoom: 19
+  }
+};
+
+function applyBasemap(id) {
+  if (state.basemapLayer) state.map.removeLayer(state.basemapLayer);
+  const cfg = BASEMAPS[id] || BASEMAPS.carto;
+  state.basemapLayer = L.tileLayer(cfg.url, { attribution: cfg.attribution, maxZoom: cfg.maxZoom });
+  state.basemapLayer.addTo(state.map);
+  state.basemap = id;
+}
+
+function onMapClick(e) {
+  if (state.drawingMode) return;
+  const { lat, lng } = e.latlng;
+  setLocation(lat, lng);
+}
+
+function onZoomEnd() {
+  const z = state.map.getZoom();
+  document.getElementById('map-zoom-info').textContent = `Zoom: ${z}`;
+}
+
+function onMoveEnd() {
+  const c = state.map.getCenter();
+  document.getElementById('map-coords').textContent =
+    `Center: ${c.lat.toFixed(4)}°, ${c.lng.toFixed(4)}°`;
+}
+
+function onMouseMove(e) {
+  if (state.drawingMode && state.drawStart) {
+    updateDrawRect(e.latlng);
+  }
+}
+
+function setLocation(lat, lng) {
+  state.center = [lat, lng];
+  document.getElementById('lat-input').value = lat.toFixed(5);
+  document.getElementById('lng-input').value = lng.toFixed(5);
+
+  if (state.locationMarker) state.map.removeLayer(state.locationMarker);
+  state.locationMarker = L.circleMarker([lat, lng], {
+    radius: 8, color: '#4a9eff', weight: 3, fillColor: '#4a9eff', fillOpacity: 0.3
+  }).addTo(state.map);
+
+  computeBboxFromCenter();
+}
+
+function computeBboxFromCenter() {
+  const [lat, lng] = state.center;
+  const radiusDeg = parseFloat(document.getElementById('view-radius').value) * 0.4;
+  const lonAdj = radiusDeg / Math.max(Math.cos((lat * Math.PI) / 180), 0.01);
+  state.bbox = [
+    +(lng - lonAdj).toFixed(6),
+    +(lat - radiusDeg).toFixed(6),
+    +(lng + lonAdj).toFixed(6),
+    +(lat + radiusDeg).toFixed(6),
+  ];
+  drawBboxOnMap();
+  updateAoiInfo();
+}
+
+function drawBboxOnMap() {
+  if (!state.bbox) return;
+  if (state.bboxRect) state.map.removeLayer(state.bboxRect);
+  const [w, s, e, n] = state.bbox;
+  state.bboxRect = L.rectangle([[s, w], [n, e]], {
+    color: '#4a9eff', weight: 2, fill: true, fillColor: '#4a9eff', fillOpacity: 0.1,
+    dashArray: '6, 4'
+  }).addTo(state.map);
+}
+
+function updateAoiInfo() {
+  if (!state.bbox) { document.getElementById('aoi-info').style.display = 'none'; return; }
+  const [w, s, e, n] = state.bbox;
+  document.getElementById('aoi-info').style.display = 'flex';
+  document.getElementById('aoi-coords-display').textContent =
+    `${s.toFixed(2)}°S, ${w.toFixed(2)}°W → ${n.toFixed(2)}°N, ${e.toFixed(2)}°E`;
+}
+
+function clearAoi() {
+  state.bbox = null;
+  if (state.bboxRect) { state.map.removeLayer(state.bboxRect); state.bboxRect = null; }
+  if (state.locationMarker) { state.map.removeLayer(state.locationMarker); state.locationMarker = null; }
+  document.getElementById('aoi-info').style.display = 'none';
+  document.getElementById('lat-input').value = '';
+  document.getElementById('lng-input').value = '';
+}
+
+// ---- Draw Rectangle ----
+function startDrawMode() {
+  state.drawingMode = true;
+  state.map.getContainer().style.cursor = 'crosshair';
+  document.getElementById('draw-rect-btn').classList.add('active');
+  document.getElementById('draw-hint').style.display = 'inline';
+
+  state.map.on('mousedown', onDrawStart);
+  state.map.on('mouseup', onDrawEnd);
+  state.map.dragging.disable();
+}
+
+function stopDrawMode() {
+  state.drawingMode = false;
+  state.drawStart = null;
+  state.map.getContainer().style.cursor = '';
+  document.getElementById('draw-rect-btn').classList.remove('active');
+  document.getElementById('draw-hint').style.display = 'none';
+
+  state.map.off('mousedown', onDrawStart);
+  state.map.off('mouseup', onDrawEnd);
+  if (state.drawTempRect) { state.map.removeLayer(state.drawTempRect); state.drawTempRect = null; }
+  state.map.dragging.enable();
+}
+
+function onDrawStart(e) {
+  state.drawStart = e.latlng;
+  if (state.drawTempRect) state.map.removeLayer(state.drawTempRect);
+  state.drawTempRect = L.rectangle(
+    [[e.latlng.lat, e.latlng.lng], [e.latlng.lat, e.latlng.lng]],
+    { color: '#4a9eff', weight: 2, fillOpacity: 0.1, dashArray: '4,4' }
+  ).addTo(state.map);
+}
+
+function updateDrawRect(latlng) {
+  if (!state.drawTempRect || !state.drawStart) return;
+  state.drawTempRect.setBounds([
+    [state.drawStart.lat, state.drawStart.lng],
+    [latlng.lat, latlng.lng]
+  ]);
+}
+
+function onDrawEnd(e) {
+  if (!state.drawStart) return;
+  const end = e.latlng;
+  const s = state.drawStart;
+  const w = Math.min(s.lng, end.lng);
+  const e2 = Math.max(s.lng, end.lng);
+  const south = Math.min(s.lat, end.lat);
+  const north = Math.max(s.lat, end.lat);
+
+  if (Math.abs(e2 - w) < 0.01 || Math.abs(north - south) < 0.01) {
+    stopDrawMode();
+    return;
+  }
+
+  state.bbox = [+w.toFixed(6), +south.toFixed(6), +e2.toFixed(6), +north.toFixed(6)];
+  state.center = [+(south + (north - south) / 2).toFixed(5), +(w + (e2 - w) / 2).toFixed(5)];
+
+  if (state.locationMarker) { state.map.removeLayer(state.locationMarker); state.locationMarker = null; }
+  document.getElementById('lat-input').value = state.center[0];
+  document.getElementById('lng-input').value = state.center[1];
+
+  drawBboxOnMap();
+  updateAoiInfo();
+  stopDrawMode();
+}
+
+// ---- Satellite & Layer UI ----
+function renderSatelliteGrid() {
+  const grid = document.getElementById('satellite-grid');
+  grid.innerHTML = '';
+  SATELLITES.forEach(sat => {
+    const card = document.createElement('div');
+    card.className = 'sat-card' + (sat.id === state.satellite ? ' active' : '');
+    card.dataset.id = sat.id;
+    card.innerHTML = `
+      <div class="sat-card-header">
+        <span class="sat-name">${sat.name}</span>
+        <span class="sat-agency">${sat.agency}</span>
+      </div>
+      <div class="sat-meta">
+        <span title="Revisit time">⏱ ${sat.revisit}</span>
+        <span title="Resolution">📐 ${sat.resolution}</span>
+        ${sat.geostationary ? '<span class="geo-badge">GEO</span>' : ''}
+      </div>`;
+    card.addEventListener('click', () => selectSatellite(sat.id));
+    grid.appendChild(card);
+  });
+}
+
+function selectSatellite(id) {
+  state.satellite = id;
+  document.querySelectorAll('.sat-card').forEach(c => c.classList.remove('active'));
+  document.querySelector(`.sat-card[data-id="${id}"]`).classList.add('active');
+
+  const sat = SATELLITES.find(s => s.id === id);
+  // Default to first layer of new satellite
+  if (!sat.layers.find(l => l.id === state.layer)) {
+    state.layer = sat.layers[0].id;
+  }
+  renderLayerGrid();
+  updateSatInfo(sat);
+}
+
+function renderLayerGrid() {
+  const grid = document.getElementById('layer-grid');
+  grid.innerHTML = '';
+  const sat = SATELLITES.find(s => s.id === state.satellite);
+  if (!sat) return;
+
+  sat.layers.forEach(layer => {
+    const btn = document.createElement('button');
+    btn.className = 'layer-btn' + (layer.id === state.layer ? ' active' : '');
+    btn.dataset.id = layer.id;
+    btn.title = layer.description;
+    btn.innerHTML = `<span class="layer-icon">${layer.icon}</span><span class="layer-name">${layer.name}</span>`;
+    if (layer.type === 'overlay') {
+      btn.innerHTML += '<span class="layer-badge">+Base</span>';
+    }
+    btn.addEventListener('click', () => selectLayer(layer.id));
+    grid.appendChild(btn);
+  });
+
+  updateLayerDescription();
+}
+
+function selectLayer(id) {
+  state.layer = id;
+  document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.layer-btn[data-id="${id}"]`).classList.add('active');
+  updateLayerDescription();
+}
+
+function updateLayerDescription() {
+  const sat = SATELLITES.find(s => s.id === state.satellite);
+  const layer = sat && sat.layers.find(l => l.id === state.layer);
+  if (!layer) return;
+  const desc = document.getElementById('layer-description');
+  desc.innerHTML = `<span class="layer-use-badge">${layer.usecase || ''}</span> ${layer.description}`;
+}
+
+function updateSatInfo(sat) {
+  const el = document.getElementById('sat-info-text');
+  if (el) {
+    el.textContent = `Coverage: ${sat.coverage} | Available from: ${sat.startDate}`;
+  }
+}
+
+// ---- Timeline Slots ----
+function addDefaultSlots() {
+  const today = new Date();
+  const minus30 = offsetDate(today, -30);
+  const minus7 = offsetDate(today, -7);
+
+  addSlot('Pre-Disaster', minus30);
+  addSlot('Disaster Event', minus7);
+  addSlot('Post-Disaster', formatDate(today));
+}
+
+function addSlot(label = '', date = '') {
+  const id = ++state.slotIdCounter;
+  if (!date) date = formatDate(new Date());
+  if (!label) label = `Date ${state.slots.length + 1}`;
+
+  state.slots.push({ id, label, date });
+  renderTimelineSlots();
+}
+
+function removeSlot(id) {
+  state.slots = state.slots.filter(s => s.id !== id);
+  renderTimelineSlots();
+}
+
+function renderTimelineSlots() {
+  const container = document.getElementById('timeline-slots');
+  container.innerHTML = '';
+
+  document.getElementById('slot-count').textContent = `${state.slots.length} date${state.slots.length !== 1 ? 's' : ''}`;
+
+  state.slots.forEach((slot, index) => {
+    const el = document.createElement('div');
+    el.className = 'timeline-slot';
+    el.dataset.id = slot.id;
+
+    const labelClass = getSlotLabelClass(slot.label);
+    el.innerHTML = `
+      <div class="slot-number ${labelClass}">${index + 1}</div>
+      <div class="slot-fields">
+        <input type="text" class="slot-label-input" value="${escHtml(slot.label)}"
+               placeholder="Label (e.g. Pre-Flood)" data-id="${slot.id}">
+        <input type="date" class="slot-date-input" value="${slot.date}" data-id="${slot.id}">
+      </div>
+      <button class="slot-remove-btn" data-id="${slot.id}" title="Remove">✕</button>`;
+
+    container.appendChild(el);
+  });
+
+  // Bind inputs
+  container.querySelectorAll('.slot-label-input').forEach(inp => {
+    inp.addEventListener('input', e => {
+      const id = +e.target.dataset.id;
+      const s = state.slots.find(s => s.id === id);
+      if (s) {
+        s.label = e.target.value;
+        const num = e.target.closest('.timeline-slot').querySelector('.slot-number');
+        num.className = `slot-number ${getSlotLabelClass(s.label)}`;
+      }
+    });
+  });
+
+  container.querySelectorAll('.slot-date-input').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const id = +e.target.dataset.id;
+      const s = state.slots.find(s => s.id === id);
+      if (s) s.date = e.target.value;
+    });
+  });
+
+  container.querySelectorAll('.slot-remove-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      removeSlot(+e.target.dataset.id);
+    });
+  });
+}
+
+function getSlotLabelClass(label) {
+  const lower = (label || '').toLowerCase();
+  if (lower.includes('pre') || lower.includes('before') || lower.includes('prior')) return 'slot-pre';
+  if (lower.includes('peak') || lower.includes('event') || lower.includes('disaster') ||
+      lower.includes('landfall') || lower.includes('ignition') || lower.includes('quake') ||
+      lower.includes('flood') && lower.includes('flood')) return 'slot-event';
+  if (lower.includes('recovery') || lower.includes('post') || lower.includes('after')) return 'slot-post';
+  return 'slot-neutral';
+}
+
+function applyPreset(presetKey) {
+  const preset = DISASTER_PRESETS[presetKey];
+  if (!preset) return;
+
+  selectSatellite(preset.satellite);
+  selectLayer(preset.layer);
+  renderLayerGrid();
+
+  const eventDate = new Date();
+  state.slots = [];
+  state.slotIdCounter = 0;
+
+  preset.timelineSlots.forEach(ts => {
+    const d = new Date(eventDate);
+    d.setDate(d.getDate() + ts.daysOffset);
+    state.slots.push({ id: ++state.slotIdCounter, label: ts.label, date: formatDate(d) });
+  });
+
+  renderTimelineSlots();
+
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.preset-btn[data-preset="${presetKey}"]`)?.classList.add('active');
+
+  showToast(`Applied "${preset.name}" preset — adjust dates as needed`, 'info');
+}
+
+// ---- WMS Image URL ----
+function buildWmsUrl(gibsLayers, date, bbox, size) {
+  const [w, s, e, n] = bbox;
+  const layerStr = Array.isArray(gibsLayers) ? gibsLayers.join(',') : gibsLayers;
+  const hasOverlay = Array.isArray(gibsLayers) && gibsLayers.length > 1;
+  const format = hasOverlay ? 'image%2Fpng' : 'image%2Fjpeg';
+
+  return (
+    `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?` +
+    `SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap` +
+    `&LAYERS=${encodeURIComponent(layerStr)}` +
+    `&SRS=EPSG:4326` +
+    `&BBOX=${w},${s},${e},${n}` +
+    `&WIDTH=${size}&HEIGHT=${size}` +
+    `&TIME=${date}T00:00:00Z` +
+    `&FORMAT=${format}` +
+    `&TRANSPARENT=TRUE`
+  );
+}
+
+function getLayerStack() {
+  const sat = SATELLITES.find(s => s.id === state.satellite);
+  if (!sat) return [];
+  const layer = sat.layers.find(l => l.id === state.layer);
+  if (!layer) return [];
+
+  if (layer.type === 'overlay' && layer.basePair) {
+    const base = sat.layers.find(l => l.id === layer.basePair);
+    if (base) return [base.gibsLayer, layer.gibsLayer];
+  }
+  return [layer.gibsLayer];
+}
+
+// ---- Load Images ----
+async function loadImages() {
+  if (!state.bbox) {
+    showToast('Please select a location on the map first.', 'error');
+    return;
+  }
+  if (state.slots.length === 0) {
+    showToast('Please add at least one date to the timeline.', 'error');
+    return;
+  }
+
+  const invalidSlots = state.slots.filter(s => !s.date);
+  if (invalidSlots.length > 0) {
+    showToast('Please fill in all dates in the timeline.', 'error');
+    return;
+  }
+
+  showLoading(true, 'Preparing imagery requests...');
+
+  const sat = SATELLITES.find(s => s.id === state.satellite);
+  const layer = sat.layers.find(l => l.id === state.layer);
+  const gibsLayers = getLayerStack();
+
+  state.loadedSlots = state.slots.map((slot, i) => {
+    const url = buildWmsUrl(gibsLayers, slot.date, state.bbox, state.imageSize);
+    return {
+      ...slot,
+      imageUrl: url,
+      satelliteName: sat.name,
+      layerName: layer.name,
+      bbox: [...state.bbox],
+      index: i
+    };
+  });
+
+  showLoading(false);
+  renderImageGrid();
+  enableActionButtons();
+
+  document.getElementById('images-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ---- Image Grid ----
+function renderImageGrid() {
+  const grid = document.getElementById('images-grid');
+  const empty = document.getElementById('empty-state');
+  const countEl = document.getElementById('image-count');
+
+  empty.style.display = 'none';
+  grid.style.display = 'grid';
+  grid.style.gridTemplateColumns = `repeat(${state.gridCols}, 1fr)`;
+  grid.innerHTML = '';
+
+  countEl.textContent = `${state.loadedSlots.length} image${state.loadedSlots.length !== 1 ? 's' : ''}`;
+
+  state.loadedSlots.forEach((slot, idx) => {
+    grid.appendChild(buildImageCard(slot, idx));
+  });
+
+  updateCompareSelects();
+}
+
+function buildImageCard(slot, idx) {
+  const card = document.createElement('div');
+  card.className = 'image-card';
+  card.dataset.index = idx;
+
+  const headerClass = getSlotLabelClass(slot.label);
+  const [w, s, e, n] = slot.bbox;
+  const downloadFilename = `${slot.satelliteName}_${slot.label.replace(/\s+/g, '_')}_${slot.date}.jpg`;
+
+  card.innerHTML = `
+    <div class="card-header ${headerClass}">
+      <span class="card-label">${escHtml(slot.label)}</span>
+      <span class="card-date">${slot.date}</span>
+    </div>
+    <div class="card-image-wrapper">
+      <div class="card-img-loading">
+        <div class="mini-spinner"></div>
+        <span>Loading satellite imagery…</span>
+      </div>
+      <img class="card-image"
+           src="${slot.imageUrl}"
+           alt="${escHtml(slot.label)} ${slot.date}"
+           loading="lazy">
+      <div class="card-no-data" style="display:none">
+        <span>⚠️</span><span>No imagery available for this date/location</span>
+      </div>
+      <div class="card-actions">
+        <button class="card-action-btn" data-idx="${idx}" data-action="download" title="Download image">⬇ Download</button>
+        <button class="card-action-btn" data-idx="${idx}" data-action="expand" title="View fullscreen">⛶ Expand</button>
+        <button class="card-action-btn" data-idx="${idx}" data-action="nasa" title="Open in NASA Worldview">🌐 NASA</button>
+      </div>
+    </div>
+    <div class="card-footer">
+      <span class="card-sat-tag">${slot.satelliteName}</span>
+      <span class="card-layer-tag">${slot.layerName}</span>
+    </div>`;
+
+  const img = card.querySelector('.card-image');
+  const loadingEl = card.querySelector('.card-img-loading');
+  const noDataEl = card.querySelector('.card-no-data');
+
+  img.addEventListener('load', () => {
+    loadingEl.style.display = 'none';
+    img.style.display = 'block';
+  });
+
+  img.addEventListener('error', () => {
+    loadingEl.style.display = 'none';
+    noDataEl.style.display = 'flex';
+    img.style.display = 'none';
+  });
+
+  // Actions
+  card.querySelectorAll('.card-action-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const action = btn.dataset.action;
+      const i = +btn.dataset.idx;
+      if (action === 'download') downloadImage(state.loadedSlots[i].imageUrl, downloadFilename);
+      if (action === 'expand') expandImage(i);
+      if (action === 'nasa') openNASAWorldview(state.loadedSlots[i]);
+    });
+  });
+
+  return card;
+}
+
+function expandImage(idx) {
+  const slot = state.loadedSlots[idx];
+  if (!slot) return;
+
+  const overlay = document.getElementById('expand-modal');
+  const img = document.getElementById('expand-img');
+  const title = document.getElementById('expand-title');
+
+  img.src = slot.imageUrl;
+  title.textContent = `${slot.label} — ${slot.date} — ${slot.satelliteName}`;
+  overlay.style.display = 'flex';
+}
+
+function openNASAWorldview(slot) {
+  const [w, s, e, n] = slot.bbox;
+  const center = `${((s + n) / 2).toFixed(4)},${((w + e) / 2).toFixed(4)}`;
+  const url = `https://worldview.earthdata.nasa.gov/?v=${w},${s},${e},${n}&t=${slot.date}`;
+  window.open(url, '_blank');
+}
+
+// ---- Image Download ----
+async function downloadImage(url, filename) {
+  try {
+    showToast('Downloading image...', 'info');
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Download failed');
+    const blob = await response.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    showToast('Image downloaded!', 'success');
+  } catch (err) {
+    showToast('Download failed. Try right-clicking the image to save.', 'error');
+  }
+}
+
+async function downloadAllImages() {
+  for (let i = 0; i < state.loadedSlots.length; i++) {
+    const slot = state.loadedSlots[i];
+    const sat = SATELLITES.find(s => s.id === state.satellite);
+    const filename = `${sat?.name || ''}_${slot.label.replace(/\s+/g, '_')}_${slot.date}.jpg`;
+    await downloadImage(slot.imageUrl, filename);
+    await new Promise(r => setTimeout(r, 500));
+  }
+}
+
+// ---- Comparison Modal ----
+function updateCompareSelects() {
+  const before = document.getElementById('compare-before');
+  const after = document.getElementById('compare-after');
+
+  [before, after].forEach(sel => {
+    sel.innerHTML = '<option value="">-- Select image --</option>';
+    state.loadedSlots.forEach((slot, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${slot.label} (${slot.date})`;
+      sel.appendChild(opt);
+    });
+  });
+
+  if (state.loadedSlots.length >= 1) before.value = 0;
+  if (state.loadedSlots.length >= 2) after.value = state.loadedSlots.length - 1;
+}
+
+function openComparisonModal() {
+  if (state.loadedSlots.length < 2) {
+    showToast('Load at least 2 images to compare.', 'error');
+    return;
+  }
+  updateCompareSelects();
+  updateComparisonView();
+  document.getElementById('comparison-modal').style.display = 'flex';
+}
+
+function updateComparisonView() {
+  const bi = +document.getElementById('compare-before').value;
+  const ai = +document.getElementById('compare-after').value;
+
+  const before = state.loadedSlots[bi];
+  const after = state.loadedSlots[ai];
+
+  if (!before || !after) return;
+
+  const mode = state.compareMode;
+
+  document.getElementById('comparison-slider-view').style.display = mode === 'slider' ? 'block' : 'none';
+  document.getElementById('side-by-side-view').style.display = mode === 'sidebyside' ? 'flex' : 'none';
+
+  if (mode === 'slider') {
+    const beforeImg = document.getElementById('cmp-before-img');
+    const afterImg = document.getElementById('cmp-after-img');
+    const slider = document.getElementById('cmp-slider');
+
+    beforeImg.src = before.imageUrl;
+    afterImg.src = after.imageUrl;
+
+    document.getElementById('cmp-before-label').textContent = `${before.label} | ${before.date}`;
+    document.getElementById('cmp-after-label').textContent = `${after.label} | ${after.date}`;
+
+    slider.value = 50;
+    applySliderSplit(50);
+
+    slider.oninput = () => applySliderSplit(+slider.value);
+  } else {
+    document.getElementById('sbs-before-img').src = before.imageUrl;
+    document.getElementById('sbs-after-img').src = after.imageUrl;
+    document.getElementById('sbs-before-label').textContent = `${before.label} (${before.date})`;
+    document.getElementById('sbs-after-label').textContent = `${after.label} (${after.date})`;
+  }
+}
+
+function applySliderSplit(pct) {
+  const beforeImg = document.getElementById('cmp-before-img');
+  beforeImg.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+  const divider = document.getElementById('cmp-divider');
+  divider.style.left = pct + '%';
+}
+
+// ---- Location Search (Nominatim) ----
+async function searchLocation(query) {
+  if (!query.trim()) return;
+  try {
+    showToast('Searching...', 'info');
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const data = await res.json();
+    if (data && data.length > 0) {
+      const loc = data[0];
+      const lat = parseFloat(loc.lat);
+      const lng = parseFloat(loc.lon);
+      state.map.setView([lat, lng], 7);
+      setLocation(lat, lng);
+      showToast(`Found: ${loc.display_name.split(',').slice(0, 2).join(',')}`, 'success');
+    } else {
+      showToast('Location not found. Try different search terms.', 'error');
+    }
+  } catch (e) {
+    showToast('Search failed. Please try again.', 'error');
+  }
+}
+
+// ---- Grid Columns ----
+function setGridCols(cols) {
+  state.gridCols = cols;
+  document.querySelectorAll('.grid-col-btn').forEach(b => {
+    b.classList.toggle('active', +b.dataset.cols === cols);
+  });
+  if (state.loadedSlots.length > 0) renderImageGrid();
+}
+
+// ---- Enable/Disable Buttons ----
+function enableActionButtons() {
+  document.getElementById('compare-btn').disabled = false;
+  document.getElementById('export-all-btn').disabled = false;
+}
+
+// ---- Loading Overlay ----
+function showLoading(show, text = 'Loading satellite imagery...') {
+  const overlay = document.getElementById('loading-overlay');
+  overlay.style.display = show ? 'flex' : 'none';
+  document.getElementById('loading-text').textContent = text;
+}
+
+// ---- Toast Notifications ----
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('visible'));
+  setTimeout(() => {
+    toast.classList.remove('visible');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+// ---- Helpers ----
+function formatDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function offsetDate(base, days) {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return formatDate(d);
+}
+
+function escHtml(str) {
+  return (str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ---- Event Listeners ----
+function setupEventListeners() {
+  // Preset buttons
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => applyPreset(btn.dataset.preset));
+  });
+
+  // Location controls
+  document.getElementById('search-btn').addEventListener('click', () => {
+    searchLocation(document.getElementById('location-search').value);
+  });
+  document.getElementById('location-search').addEventListener('keypress', e => {
+    if (e.key === 'Enter') searchLocation(e.target.value);
+  });
+  document.getElementById('go-to-location').addEventListener('click', () => {
+    const lat = parseFloat(document.getElementById('lat-input').value);
+    const lng = parseFloat(document.getElementById('lng-input').value);
+    if (isNaN(lat) || isNaN(lng)) { showToast('Enter valid coordinates.', 'error'); return; }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      showToast('Latitude must be -90–90, longitude -180–180.', 'error'); return;
+    }
+    state.map.setView([lat, lng], state.map.getZoom() < 5 ? 7 : state.map.getZoom());
+    setLocation(lat, lng);
+  });
+  document.getElementById('use-map-view').addEventListener('click', () => {
+    const bounds = state.map.getBounds();
+    state.bbox = [
+      +bounds.getWest().toFixed(6), +bounds.getSouth().toFixed(6),
+      +bounds.getEast().toFixed(6), +bounds.getNorth().toFixed(6)
+    ];
+    const c = bounds.getCenter();
+    state.center = [+c.lat.toFixed(5), +c.lng.toFixed(5)];
+    document.getElementById('lat-input').value = state.center[0];
+    document.getElementById('lng-input').value = state.center[1];
+    drawBboxOnMap();
+    updateAoiInfo();
+    showToast('Current map view set as area of interest.', 'success');
+  });
+  document.getElementById('view-radius').addEventListener('input', e => {
+    const kmApprox = Math.round(parseFloat(e.target.value) * 89);
+    document.getElementById('area-km-display').textContent = `~${kmApprox} km`;
+    if (state.center[0] !== 0 || state.center[1] !== 0) computeBboxFromCenter();
+  });
+  document.getElementById('clear-aoi-btn').addEventListener('click', clearAoi);
+
+  // Draw rectangle
+  document.getElementById('draw-rect-btn').addEventListener('click', () => {
+    if (state.drawingMode) stopDrawMode();
+    else startDrawMode();
+  });
+
+  // Basemap
+  document.getElementById('basemap-select').addEventListener('change', e => applyBasemap(e.target.value));
+
+  // Timeline
+  document.getElementById('add-slot-btn').addEventListener('click', () => addSlot());
+  document.getElementById('clear-all-slots-btn').addEventListener('click', () => {
+    if (state.slots.length === 0) return;
+    if (confirm('Clear all timeline slots?')) {
+      state.slots = [];
+      renderTimelineSlots();
+    }
+  });
+
+  // Grid columns
+  document.querySelectorAll('.grid-col-btn').forEach(btn => {
+    btn.addEventListener('click', () => setGridCols(+btn.dataset.cols));
+  });
+
+  // Image size
+  document.getElementById('image-size-select').addEventListener('change', e => {
+    state.imageSize = +e.target.value;
+  });
+
+  // Load / export / compare
+  document.getElementById('load-images-btn').addEventListener('click', loadImages);
+  document.getElementById('export-all-btn').addEventListener('click', downloadAllImages);
+  document.getElementById('compare-btn').addEventListener('click', openComparisonModal);
+
+  // Comparison modal
+  document.getElementById('close-comparison').addEventListener('click', () => {
+    document.getElementById('comparison-modal').style.display = 'none';
+  });
+  document.getElementById('comparison-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('comparison-modal')) {
+      document.getElementById('comparison-modal').style.display = 'none';
+    }
+  });
+  document.getElementById('compare-before').addEventListener('change', updateComparisonView);
+  document.getElementById('compare-after').addEventListener('change', updateComparisonView);
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.compareMode = btn.dataset.mode;
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      updateComparisonView();
+    });
+  });
+
+  // Expand modal
+  document.getElementById('expand-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('expand-modal') || e.target.id === 'expand-close') {
+      document.getElementById('expand-modal').style.display = 'none';
+    }
+  });
+
+  // Sidebar toggle on mobile
+  document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
+    document.getElementById('sidebar').classList.toggle('open');
+  });
+}
