@@ -548,6 +548,46 @@ input[type="range"]::-webkit-slider-thumb {
   gap: 3px;
 }
 
+.slot-label-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.slot-label-row .slot-label-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.cascade-badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  background: #0d2818;
+  color: var(--pre);
+  border: 1px solid var(--pre);
+  border-radius: 4px;
+  padding: 2px 5px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.slot-is-event {
+  border-color: var(--event) !important;
+  box-shadow: 0 0 0 1px rgba(248, 81, 73, 0.25);
+}
+
+.offset-badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  background: var(--surface);
+  color: var(--text3);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: monospace;
+  white-space: nowrap;
+}
+
 .slot-label-input,
 .slot-date-input {
   font-size: 11px;

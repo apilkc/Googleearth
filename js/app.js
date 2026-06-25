@@ -63,24 +63,45 @@ function initMap() {
 }
 
 const BASEMAPS = {
-  osm: {
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
-    maxZoom: 19
-  },
   gibs: {
-    // NASA GIBS MODIS Terra true color — the same imagery used by the tool itself
-    // Uses yesterday's date since today's processing may not be complete
+    name: 'NASA MODIS (Today)',
     url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${(()=>{ const d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); })()}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
     attribution: 'Imagery: <a href="https://earthdata.nasa.gov">NASA GIBS</a> / MODIS Terra',
     maxZoom: 9
   },
-  satellite: {
+  viirs: {
+    name: 'NASA VIIRS (Today)',
+    url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_NOAA20_CorrectedReflectance_TrueColor/default/${(()=>{ const d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); })()}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
+    attribution: 'Imagery: <a href="https://earthdata.nasa.gov">NASA GIBS</a> / VIIRS NOAA-20',
+    maxZoom: 9
+  },
+  google: {
+    name: 'Google Satellite',
+    url: 'https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+    attribution: '© <a href="https://maps.google.com">Google</a>',
+    maxZoom: 21,
+    subdomains: ['0', '1', '2', '3']
+  },
+  sentinel2: {
+    name: 'Sentinel-2 Cloudless',
+    url: 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2022_3857/default/g/{z}/{y}/{x}.jpg',
+    attribution: '© <a href="https://s2maps.eu">Sentinel-2 cloudless 2022</a> by <a href="https://eox.at">EOX IT Services GmbH</a> (CC BY 4.0)',
+    maxZoom: 18
+  },
+  esri: {
+    name: 'ESRI World Imagery',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: '© <a href="https://www.esri.com/">Esri</a>',
+    attribution: '© <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics',
+    maxZoom: 19
+  },
+  osm: {
+    name: 'OpenStreetMap',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19
   },
   carto: {
+    name: 'Dark (CartoDB)',
     url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
     attribution: '© OpenStreetMap © <a href="https://carto.com/">CARTO</a>',
     maxZoom: 19
@@ -89,12 +110,10 @@ const BASEMAPS = {
 
 function applyBasemap(id) {
   if (state.basemapLayer) state.map.removeLayer(state.basemapLayer);
-  const cfg = BASEMAPS[id] || BASEMAPS.osm;
-  // Do NOT set crossOrigin — it breaks tile loading when servers don't echo CORS headers
-  state.basemapLayer = L.tileLayer(cfg.url, {
-    attribution: cfg.attribution,
-    maxZoom: cfg.maxZoom,
-  });
+  const cfg = BASEMAPS[id] || BASEMAPS.gibs;
+  const opts = { attribution: cfg.attribution, maxZoom: cfg.maxZoom };
+  if (cfg.subdomains) opts.subdomains = cfg.subdomains;
+  state.basemapLayer = L.tileLayer(cfg.url, opts);
   state.basemapLayer.addTo(state.map);
   state.basemap = id;
   // Sync dropdown
@@ -331,21 +350,35 @@ function updateSatInfo(sat) {
 // ---- Timeline Slots ----
 function addDefaultSlots() {
   const today = new Date();
-  const minus30 = offsetDate(today, -30);
-  const minus7 = offsetDate(today, -7);
-
-  addSlot('Pre-Disaster', minus30);
-  addSlot('Disaster Event', minus7);
-  addSlot('Post-Disaster', formatDate(today));
+  addSlot('Pre-Disaster',   offsetDate(today, -30), null,  false);
+  addSlot('Disaster Event', offsetDate(today, -7),  0,     true);
+  addSlot('Post-Disaster',  formatDate(today),       7,    false);
 }
 
-function addSlot(label = '', date = '') {
+// daysOffset: null = manual slot (no cascade), number = days from event slot
+// isEvent: true = this slot drives all others when its date changes
+function addSlot(label = '', date = '', daysOffset = null, isEvent = false) {
   const id = ++state.slotIdCounter;
   if (!date) date = formatDate(new Date());
   if (!label) label = `Date ${state.slots.length + 1}`;
-
-  state.slots.push({ id, label, date });
+  state.slots.push({ id, label, date, daysOffset, isEvent });
   renderTimelineSlots();
+}
+
+// When the event slot date changes, recalculate all offset slots
+function cascadeDatesFromEvent(eventDateStr) {
+  if (!eventDateStr) return;
+  const base = new Date(eventDateStr + 'T12:00:00'); // noon avoids DST edge cases
+  let changed = false;
+  state.slots.forEach(slot => {
+    if (!slot.isEvent && slot.daysOffset !== null) {
+      const d = new Date(base);
+      d.setDate(d.getDate() + slot.daysOffset);
+      slot.date = formatDate(d);
+      changed = true;
+    }
+  });
+  if (changed) renderTimelineSlots();
 }
 
 function removeSlot(id) {
@@ -361,15 +394,22 @@ function renderTimelineSlots() {
 
   state.slots.forEach((slot, index) => {
     const el = document.createElement('div');
-    el.className = 'timeline-slot';
+    el.className = 'timeline-slot' + (slot.isEvent ? ' slot-is-event' : '');
     el.dataset.id = slot.id;
 
     const labelClass = getSlotLabelClass(slot.label);
+    const cascadeBadge = slot.isEvent
+      ? '<span class="cascade-badge" title="Changing this date updates all other dates">⟳ Drives timeline</span>'
+      : (slot.daysOffset !== null ? `<span class="offset-badge">Δ${slot.daysOffset >= 0 ? '+' : ''}${slot.daysOffset}d</span>` : '');
+
     el.innerHTML = `
       <div class="slot-number ${labelClass}">${index + 1}</div>
       <div class="slot-fields">
-        <input type="text" class="slot-label-input" value="${escHtml(slot.label)}"
-               placeholder="Label (e.g. Pre-Flood)" data-id="${slot.id}">
+        <div class="slot-label-row">
+          <input type="text" class="slot-label-input" value="${escHtml(slot.label)}"
+                 placeholder="Label (e.g. Pre-Flood)" data-id="${slot.id}">
+          ${cascadeBadge}
+        </div>
         <input type="date" class="slot-date-input" value="${slot.date}" data-id="${slot.id}">
       </div>
       <button class="slot-remove-btn" data-id="${slot.id}" title="Remove">✕</button>`;
@@ -394,7 +434,13 @@ function renderTimelineSlots() {
     inp.addEventListener('change', e => {
       const id = +e.target.dataset.id;
       const s = state.slots.find(s => s.id === id);
-      if (s) s.date = e.target.value;
+      if (!s) return;
+      s.date = e.target.value;
+      // If this is the event slot, cascade all relative dates
+      if (s.isEvent) {
+        cascadeDatesFromEvent(s.date);
+        showToast('All timeline dates updated relative to event date.', 'success');
+      }
     });
   });
 
@@ -430,7 +476,13 @@ function applyPreset(presetKey) {
   preset.timelineSlots.forEach(ts => {
     const d = new Date(eventDate);
     d.setDate(d.getDate() + ts.daysOffset);
-    state.slots.push({ id: ++state.slotIdCounter, label: ts.label, date: formatDate(d) });
+    state.slots.push({
+      id: ++state.slotIdCounter,
+      label: ts.label,
+      date: formatDate(d),
+      daysOffset: ts.daysOffset,
+      isEvent: ts.daysOffset === 0
+    });
   });
 
   renderTimelineSlots();

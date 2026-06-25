@@ -200,11 +200,20 @@
           <button id="draw-rect-btn" class="btn btn-sm btn-outline" title="Draw a bounding box on the map">
             ▭ Draw Area
           </button>
-          <select id="basemap-select" title="Change basemap style">
-            <option value="gibs" selected>NASA MODIS (Today)</option>
-            <option value="osm">Street Map</option>
-            <option value="satellite">ESRI Satellite</option>
-            <option value="carto">Dark</option>
+          <select id="basemap-select" title="Change map background">
+            <optgroup label="🛰 NASA (Free)">
+              <option value="gibs" selected>NASA MODIS Terra</option>
+              <option value="viirs">NASA VIIRS NOAA-20</option>
+            </optgroup>
+            <optgroup label="🌍 Commercial Satellite">
+              <option value="google">Google Satellite</option>
+              <option value="esri">ESRI World Imagery</option>
+              <option value="sentinel2">Sentinel-2 Cloudless (ESA)</option>
+            </optgroup>
+            <optgroup label="🗺 Reference Maps">
+              <option value="osm">OpenStreetMap</option>
+              <option value="carto">Dark (CartoDB)</option>
+            </optgroup>
           </select>
         </div>
       </div>
