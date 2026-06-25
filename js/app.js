@@ -539,16 +539,11 @@ function _tile2lat(y, z) {
 }
 function _bboxZoom(bbox, maxZ) {
   const span = Math.max(bbox[2] - bbox[0], bbox[3] - bbox[1]);
-
-  // Highest zoom where bbox still fits within 7×7 = 49 tiles
-  // tile_width_deg = 360 / 2^z  → tiles_per_dim = span / (360/2^z)
-  // Want tiles_per_dim ≤ 7 → 2^z ≤ 7*360/span → z ≤ log2(2520/span)
+  // Highest zoom where the bbox still fits within a 7×7 = 49-tile grid
+  // tile_width_deg = 360/2^z → max_z = floor(log2(7*360/span)) = floor(log2(2520/span))
   const maxByTileCount = Math.floor(Math.log2(2520 / span));
-
-  // Prefer current map zoom so tiles match what's on screen
-  const mapZ = state.map ? state.map.getZoom() : maxByTileCount;
-
-  return Math.max(1, Math.min(mapZ, maxZ, maxByTileCount));
+  // Always use maximum available zoom (best resolution) within the satellite cap and tile limit
+  return Math.max(1, Math.min(maxZ, maxByTileCount));
 }
 
 // Stitch tiles into a cropped 512×512 canvas. Returns canvas or null on failure.
@@ -791,6 +786,25 @@ async function loadImages() {
   }
 
   const sat        = SATELLITES.find(s => s.id === state.satellite);
+
+  // GIBS satellites top out at zoom 9 (~250 m/px, ~0.7°/tile).
+  // A viewport smaller than 0.5° would produce a sub-pixel crop that looks like noise.
+  // Expand to a minimum 0.5° span centred on the viewport so images are always meaningful.
+  if (!sat.provider) {
+    const [w, s, e, n] = activeBbox;
+    const cLon = (w + e) / 2, cLat = (s + n) / 2;
+    const span = Math.max(e - w, n - s);
+    const MIN_GIBS_SPAN = 0.5; // ~55 km; good match for 250 m GIBS resolution
+    if (span < MIN_GIBS_SPAN) {
+      const h = MIN_GIBS_SPAN / 2;
+      activeBbox = [
+        +Math.max(-180, cLon - h).toFixed(6),
+        +Math.max(-90,  cLat - h).toFixed(6),
+        +Math.min(180,  cLon + h).toFixed(6),
+        +Math.min(90,   cLat + h).toFixed(6)
+      ];
+    }
+  }
   const layer      = sat.layers.find(l => l.id === state.layer);
   const gibsLayers = getLayerStack();
 
