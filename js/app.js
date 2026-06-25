@@ -17,7 +17,7 @@ const state = {
 
   satellite: 'modis_terra',
   layer: 'true_color',
-  basemap: 'osm',
+  basemap: 'gibs',
 
   slots: [],            // [{id, label, date}]
   loadedSlots: [],      // [{id, label, date, imageUrl, satellite, layer}]
@@ -48,10 +48,9 @@ function initMap() {
     center: state.center,
     zoom: state.zoom,
     zoomControl: true,
-    preferCanvas: true,
   });
 
-  applyBasemap('osm');
+  applyBasemap('gibs');
 
   state.map.on('click', onMapClick);
   state.map.on('zoomend', onZoomEnd);
@@ -69,14 +68,21 @@ const BASEMAPS = {
     attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
     maxZoom: 19
   },
-  carto: {
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/">CARTO</a>',
-    maxZoom: 19
+  gibs: {
+    // NASA GIBS MODIS Terra true color — the same imagery used by the tool itself
+    // Uses yesterday's date since today's processing may not be complete
+    url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${(()=>{ const d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); })()}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
+    attribution: 'Imagery: <a href="https://earthdata.nasa.gov">NASA GIBS</a> / MODIS Terra',
+    maxZoom: 9
   },
   satellite: {
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     attribution: '© <a href="https://www.esri.com/">Esri</a>',
+    maxZoom: 19
+  },
+  carto: {
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap © <a href="https://carto.com/">CARTO</a>',
     maxZoom: 19
   }
 };
@@ -84,10 +90,10 @@ const BASEMAPS = {
 function applyBasemap(id) {
   if (state.basemapLayer) state.map.removeLayer(state.basemapLayer);
   const cfg = BASEMAPS[id] || BASEMAPS.osm;
+  // Do NOT set crossOrigin — it breaks tile loading when servers don't echo CORS headers
   state.basemapLayer = L.tileLayer(cfg.url, {
     attribution: cfg.attribution,
     maxZoom: cfg.maxZoom,
-    crossOrigin: true
   });
   state.basemapLayer.addTo(state.map);
   state.basemap = id;
