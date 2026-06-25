@@ -45,6 +45,9 @@
 <!-- ==============================
      MAIN LAYOUT
      ============================== -->
+<!-- Backdrop for mobile sidebar -->
+<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
 <div class="app-layout">
 
   <!-- LEFT SIDEBAR -->
@@ -179,6 +182,13 @@
   <!-- MAIN CONTENT -->
   <main class="main-content">
 
+    <!-- Mobile hint bar -->
+    <div class="mobile-hint" id="mobile-hint" onclick="openSidebar()">
+      <span>⚙️</span>
+      <span><strong>Tap here</strong> to configure satellite, layer &amp; timeline</span>
+      <span>→</span>
+    </div>
+
     <!-- MAP PANEL -->
     <div class="map-panel">
       <div class="panel-header">
@@ -192,14 +202,14 @@
             ▭ Draw Area
           </button>
           <select id="basemap-select" title="Change basemap style">
-            <option value="carto">Dark</option>
+            <option value="osm" selected>Street Map</option>
             <option value="satellite">Satellite</option>
-            <option value="osm">Street Map</option>
+            <option value="carto">Dark</option>
           </select>
         </div>
       </div>
 
-      <div id="location-map"></div>
+      <div id="location-map" style="height:300px;width:100%"></div>
 
       <div class="map-status-bar">
         <span id="map-coords">Click on the map to set a location</span>

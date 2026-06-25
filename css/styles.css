@@ -1278,11 +1278,38 @@ input[type="range"]::-webkit-slider-thumb {
 }
 .leaflet-control-attribution a { color: var(--text3) !important; }
 
+/* ---- SIDEBAR BACKDROP (mobile) ---- */
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 850;
+}
+.sidebar-backdrop.visible { display: block; }
+
+/* ---- MOBILE HINT BAR ---- */
+.mobile-hint {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--accent-dim);
+  border-bottom: 1px solid var(--accent);
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
 /* ---- RESPONSIVE ---- */
 .sidebar-toggle-btn { display: none; }
 
 @media (max-width: 768px) {
   .sidebar-toggle-btn { display: inline-flex; }
+  .mobile-hint        { display: flex; }
+
+  .app-layout { overflow: visible; height: auto; flex-direction: column; }
 
   .sidebar {
     position: fixed;
@@ -1291,29 +1318,47 @@ input[type="range"]::-webkit-slider-thumb {
     bottom: 0;
     z-index: 900;
     transform: translateX(-100%);
-    transition: transform 0.3s;
-    width: 280px;
-    min-width: 280px;
+    transition: transform 0.3s ease;
+    width: 88vw;
+    max-width: 340px;
+    min-width: 0;
+    box-shadow: 4px 0 20px rgba(0,0,0,0.5);
   }
 
   .sidebar.open { transform: translateX(0); }
 
-  .main-content { width: 100%; }
+  .main-content {
+    width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  .map-panel {
+    height: auto;
+    flex-shrink: 0;
+  }
+
+  #location-map {
+    height: 260px !important;
+  }
+
+  .images-panel {
+    min-height: 50vh;
+  }
 
   .header-subtitle { display: none; }
-
-  .preset-label { display: none; }
-
-  .map-panel { height: 260px; }
+  .preset-label    { display: none; }
+  .preset-btn      { padding: 4px 8px; font-size: 10px; }
 
   .comparison-setup { flex-direction: column; align-items: stretch; }
-
   .compare-selector select { min-width: auto; width: 100%; }
+
+  .images-grid { grid-template-columns: repeat(2, 1fr) !important; }
 }
 
 @media (max-width: 480px) {
   .images-grid { padding: 8px; gap: 8px; }
-  .preset-btn span { display: none; }
+  .header-logo { display: none; }
 }
 
 /* ---- SCROLLBAR ---- */

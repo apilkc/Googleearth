@@ -17,7 +17,7 @@ const state = {
 
   satellite: 'modis_terra',
   layer: 'true_color',
-  basemap: 'carto',
+  basemap: 'osm',
 
   slots: [],            // [{id, label, date}]
   loadedSlots: [],      // [{id, label, date, imageUrl, satellite, layer}]
@@ -48,14 +48,19 @@ function initMap() {
     center: state.center,
     zoom: state.zoom,
     zoomControl: true,
+    preferCanvas: true,
   });
 
-  applyBasemap('carto');
+  applyBasemap('osm');
 
   state.map.on('click', onMapClick);
   state.map.on('zoomend', onZoomEnd);
   state.map.on('moveend', onMoveEnd);
   state.map.on('mousemove', onMouseMove);
+
+  // Force Leaflet to recalculate size after layout settles (needed in flex containers)
+  setTimeout(() => state.map.invalidateSize(), 100);
+  window.addEventListener('resize', () => state.map.invalidateSize());
 }
 
 const BASEMAPS = {
@@ -65,7 +70,7 @@ const BASEMAPS = {
     maxZoom: 19
   },
   carto: {
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/">CARTO</a>',
     maxZoom: 19
   },
@@ -78,10 +83,17 @@ const BASEMAPS = {
 
 function applyBasemap(id) {
   if (state.basemapLayer) state.map.removeLayer(state.basemapLayer);
-  const cfg = BASEMAPS[id] || BASEMAPS.carto;
-  state.basemapLayer = L.tileLayer(cfg.url, { attribution: cfg.attribution, maxZoom: cfg.maxZoom });
+  const cfg = BASEMAPS[id] || BASEMAPS.osm;
+  state.basemapLayer = L.tileLayer(cfg.url, {
+    attribution: cfg.attribution,
+    maxZoom: cfg.maxZoom,
+    crossOrigin: true
+  });
   state.basemapLayer.addTo(state.map);
   state.basemap = id;
+  // Sync dropdown
+  const sel = document.getElementById('basemap-select');
+  if (sel) sel.value = id;
 }
 
 function onMapClick(e) {
@@ -767,6 +779,17 @@ function showToast(message, type = 'info') {
   }, 3000);
 }
 
+// ---- Sidebar (mobile) ----
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebar-backdrop').classList.add('visible');
+}
+
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-backdrop').classList.remove('visible');
+}
+
 // ---- Helpers ----
 function formatDate(d) {
   const y = d.getFullYear();
@@ -897,6 +920,7 @@ function setupEventListeners() {
 
   // Sidebar toggle on mobile
   document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
-    document.getElementById('sidebar').classList.toggle('open');
+    document.getElementById('sidebar').classList.contains('open') ? closeSidebar() : openSidebar();
   });
+  document.getElementById('sidebar-backdrop')?.addEventListener('click', closeSidebar);
 }
