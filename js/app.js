@@ -14,6 +14,7 @@ const state = {
   drawingMode: false,
   drawStart: null,
   drawTempRect: null,
+  viewportRect: null,
 
   satellite: 'modis_terra',
   layer: 'true_color',
@@ -58,7 +59,7 @@ function initMap() {
   state.map.on('mousemove', onMouseMove);
 
   // Force Leaflet to recalculate size after layout settles (needed in flex containers)
-  setTimeout(() => state.map.invalidateSize(), 100);
+  setTimeout(() => { state.map.invalidateSize(); updateViewportOutline(); }, 100);
   window.addEventListener('resize', () => state.map.invalidateSize());
 }
 
@@ -130,12 +131,36 @@ function onMapClick(e) {
 function onZoomEnd() {
   const z = state.map.getZoom();
   document.getElementById('map-zoom-info').textContent = `Zoom: ${z}`;
+  updateViewportOutline();
 }
 
 function onMoveEnd() {
   const c = state.map.getCenter();
   document.getElementById('map-coords').textContent =
     `Center: ${c.lat.toFixed(4)}°, ${c.lng.toFixed(4)}°`;
+  updateViewportOutline();
+}
+
+// Draw a dashed outline showing the current map viewport = what "Load Images" will capture.
+// Removed automatically when the user draws an explicit bbox.
+function updateViewportOutline() {
+  if (state.bbox) {
+    // Explicit selection overrides viewport outline
+    if (state.viewportRect) { state.map.removeLayer(state.viewportRect); state.viewportRect = null; }
+    return;
+  }
+  const bounds = state.map.getBounds();
+  if (state.viewportRect) {
+    state.viewportRect.setBounds(bounds);
+  } else {
+    state.viewportRect = L.rectangle(bounds, {
+      color: '#4493f8',
+      weight: 2,
+      fillOpacity: 0.04,
+      dashArray: '6 4',
+      interactive: false
+    }).addTo(state.map);
+  }
 }
 
 function onMouseMove(e) {
@@ -196,6 +221,7 @@ function clearAoi() {
   document.getElementById('aoi-info').style.display = 'none';
   document.getElementById('lat-input').value = '';
   document.getElementById('lng-input').value = '';
+  updateViewportOutline(); // restore live viewport outline
 }
 
 // ---- Draw Rectangle ----
@@ -736,10 +762,6 @@ async function resolveImageUrl(sat, layer, gibsLayers, slot, bbox) {
 
 // ---- Load Images ----
 async function loadImages() {
-  if (!state.bbox) {
-    showToast('Please select a location on the map first.', 'error');
-    return;
-  }
   if (state.slots.length === 0) {
     showToast('Please add at least one date to the timeline.', 'error');
     return;
@@ -747,6 +769,17 @@ async function loadImages() {
   if (state.slots.some(s => !s.date)) {
     showToast('Please fill in all dates in the timeline.', 'error');
     return;
+  }
+
+  // Use the explicit drawn/selected bbox if set; otherwise use the current map viewport.
+  // This means whatever is visible on the map right now becomes the image extent.
+  let activeBbox = state.bbox;
+  if (!activeBbox) {
+    const b = state.map.getBounds();
+    activeBbox = [
+      +b.getWest().toFixed(6), +b.getSouth().toFixed(6),
+      +b.getEast().toFixed(6), +b.getNorth().toFixed(6)
+    ];
   }
 
   const sat        = SATELLITES.find(s => s.id === state.satellite);
@@ -759,7 +792,7 @@ async function loadImages() {
     imageUrl:      '',
     satelliteName: sat.name,
     layerName:     layer.name,
-    bbox:          [...state.bbox],
+    bbox:          [...activeBbox],
     index:         i,
     liveOnly:      !!sat.liveOnly
   }));
@@ -771,7 +804,7 @@ async function loadImages() {
   // Fetch all images in parallel — each card updates as its tiles arrive
   await Promise.all(
     state.loadedSlots.map(async (slot, i) => {
-      const { url, usedDate } = await resolveImageUrl(sat, layer, gibsLayers, slot, state.bbox);
+      const { url, usedDate } = await resolveImageUrl(sat, layer, gibsLayers, slot, activeBbox);
       slot.imageUrl  = url;
       slot.usedDate  = usedDate;
       setCardImage(i, url, usedDate, slot.date);
