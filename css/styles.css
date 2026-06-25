@@ -431,6 +431,15 @@ input[type="range"]::-webkit-slider-thumb {
   font-weight: 700;
 }
 
+.live-badge {
+  background: #1a3a1a;
+  color: #4caf50;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
 /* ---- LAYER GRID ---- */
 .layer-grid {
   display: flex;

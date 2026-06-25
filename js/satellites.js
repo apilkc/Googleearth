@@ -314,6 +314,56 @@ const SATELLITES = [
         usecase: 'Wildfire'
       }
     ]
+  },
+  {
+    id: 'esri_world',
+    name: 'ESRI World Imagery',
+    agency: 'ESRI/Maxar',
+    iconClass: 'sat-icon-esri',
+    description: 'Sub-meter commercial imagery via ESRI ArcGIS. Current imagery, not date-specific.',
+    revisit: 'Current',
+    resolution: '~0.5m',
+    startDate: null,
+    coverage: 'Global',
+    provider: 'esri',
+    liveOnly: true,
+    layers: [
+      {
+        id: 'world_imagery',
+        name: 'World Imagery',
+        icon: '🌍',
+        gibsLayer: null,
+        format: 'jpeg',
+        description: 'High-resolution imagery from Maxar & Earthstar Geographics via ESRI ArcGIS.',
+        type: 'base',
+        usecase: 'High-res reference'
+      }
+    ]
+  },
+  {
+    id: 'google_satellite',
+    name: 'Google Satellite',
+    agency: 'Google',
+    iconClass: 'sat-icon-google',
+    description: 'Google Maps satellite imagery. Current imagery only, not date-specific.',
+    revisit: 'Current',
+    resolution: '~0.5m',
+    startDate: null,
+    coverage: 'Global',
+    provider: 'google',
+    liveOnly: true,
+    layers: [
+      {
+        id: 'satellite',
+        name: 'Satellite',
+        icon: '🛰️',
+        gibsLayer: null,
+        format: 'jpeg',
+        description: 'High-resolution Google satellite imagery. Shows most recent available imagery for the area.',
+        type: 'base',
+        usecase: 'High-res reference'
+      }
+    ]
   }
 ];
 

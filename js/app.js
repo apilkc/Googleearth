@@ -283,6 +283,7 @@ function renderSatelliteGrid() {
         <span title="Revisit time">⏱ ${sat.revisit}</span>
         <span title="Resolution">📐 ${sat.resolution}</span>
         ${sat.geostationary ? '<span class="geo-badge">GEO</span>' : ''}
+        ${sat.liveOnly ? '<span class="live-badge">⚡ Live</span>' : ''}
       </div>`;
     card.addEventListener('click', () => selectSatellite(sat.id));
     grid.appendChild(card);
@@ -343,7 +344,8 @@ function updateLayerDescription() {
 function updateSatInfo(sat) {
   const el = document.getElementById('sat-info-text');
   if (el) {
-    el.textContent = `Coverage: ${sat.coverage} | Available from: ${sat.startDate}`;
+    const since = sat.startDate ? `Available from: ${sat.startDate}` : 'Current imagery only (no date filter)';
+    el.textContent = `Coverage: ${sat.coverage} | ${since}`;
   }
 }
 
@@ -493,7 +495,7 @@ function applyPreset(presetKey) {
   showToast(`Applied "${preset.name}" preset — adjust dates as needed`, 'info');
 }
 
-// ---- WMS Image URL ----
+// ---- WMS Image URL (NASA GIBS) ----
 function buildWmsUrl(gibsLayers, date, bbox, size) {
   const [w, s, e, n] = bbox;
   const layerStr = Array.isArray(gibsLayers) ? gibsLayers.join(',') : gibsLayers;
@@ -513,9 +515,34 @@ function buildWmsUrl(gibsLayers, date, bbox, size) {
   );
 }
 
+// ---- ESRI ArcGIS Export URL ----
+function buildEsriUrl(bbox, size) {
+  const [w, s, e, n] = bbox;
+  return (
+    `https://server.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/export` +
+    `?bbox=${w},${s},${e},${n}&bboxSR=4326&size=${size},${size}&imageSR=4326&format=jpg&f=image`
+  );
+}
+
+// ---- Google Satellite Tile URL ----
+// Google has no public image-export endpoint; we show the best-fitting tile for the bbox.
+function buildGoogleTileUrl(bbox) {
+  const [w, s, e, n] = bbox;
+  const lat = (s + n) / 2;
+  const lon = (w + e) / 2;
+  const span = Math.max(e - w, n - s);
+  const zoom = span > 20 ? 5 : span > 10 ? 6 : span > 5 ? 7 : span > 2 ? 8 : span > 1 ? 9 : 10;
+  const x = Math.floor((lon + 180) / 360 * Math.pow(2, zoom));
+  const latRad = lat * Math.PI / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * Math.pow(2, zoom));
+  return `https://mt0.google.com/vt/lyrs=s&x=${x}&y=${y}&z=${zoom}`;
+}
+
 function getLayerStack() {
   const sat = SATELLITES.find(s => s.id === state.satellite);
   if (!sat) return [];
+  // Non-GIBS providers handle their own URL building
+  if (sat.provider) return [];
   const layer = sat.layers.find(l => l.id === state.layer);
   if (!layer) return [];
 
@@ -550,14 +577,22 @@ async function loadImages() {
   const gibsLayers = getLayerStack();
 
   state.loadedSlots = state.slots.map((slot, i) => {
-    const url = buildWmsUrl(gibsLayers, slot.date, state.bbox, state.imageSize);
+    let url;
+    if (sat.provider === 'esri') {
+      url = buildEsriUrl(state.bbox, state.imageSize);
+    } else if (sat.provider === 'google') {
+      url = buildGoogleTileUrl(state.bbox);
+    } else {
+      url = buildWmsUrl(gibsLayers, slot.date, state.bbox, state.imageSize);
+    }
     return {
       ...slot,
       imageUrl: url,
       satelliteName: sat.name,
       layerName: layer.name,
       bbox: [...state.bbox],
-      index: i
+      index: i,
+      liveOnly: !!sat.liveOnly
     };
   });
 
@@ -600,7 +635,7 @@ function buildImageCard(slot, idx) {
   card.innerHTML = `
     <div class="card-header ${headerClass}">
       <span class="card-label">${escHtml(slot.label)}</span>
-      <span class="card-date">${slot.date}</span>
+      <span class="card-date">${slot.liveOnly ? '⚡ Current' : slot.date}</span>
     </div>
     <div class="card-image-wrapper">
       <div class="card-img-loading">
