@@ -539,8 +539,16 @@ function _tile2lat(y, z) {
 }
 function _bboxZoom(bbox, maxZ) {
   const span = Math.max(bbox[2] - bbox[0], bbox[3] - bbox[1]);
-  const z = span > 30 ? 4 : span > 15 ? 5 : span > 8 ? 6 : span > 4 ? 7 : span > 2 ? 8 : span > 1 ? 9 : 10;
-  return Math.min(z, maxZ);
+
+  // Highest zoom where bbox still fits within 7×7 = 49 tiles
+  // tile_width_deg = 360 / 2^z  → tiles_per_dim = span / (360/2^z)
+  // Want tiles_per_dim ≤ 7 → 2^z ≤ 7*360/span → z ≤ log2(2520/span)
+  const maxByTileCount = Math.floor(Math.log2(2520 / span));
+
+  // Prefer current map zoom so tiles match what's on screen
+  const mapZ = state.map ? state.map.getZoom() : maxByTileCount;
+
+  return Math.max(1, Math.min(mapZ, maxZ, maxByTileCount));
 }
 
 // Stitch tiles into a cropped 512×512 canvas. Returns canvas or null on failure.
@@ -549,7 +557,7 @@ async function _stitchToCanvas(bbox, tileUrlFn, zoom) {
   const xMin = _lon2tile(w, zoom), xMax = _lon2tile(e, zoom);
   const yMin = _lat2tile(n, zoom), yMax = _lat2tile(s, zoom); // y increases downward
   const cols = xMax - xMin + 1, rows = yMax - yMin + 1;
-  if (cols * rows > 25) return null; // too many tiles, skip
+  if (cols * rows > 49) return null; // too many tiles, skip
 
   const T = 256;
   const raw = document.createElement('canvas');
