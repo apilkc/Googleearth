@@ -572,6 +572,61 @@ async function _stitchGibs(layerName, date, bbox, isPng) {
   return _stitchToCanvas(bbox, fn, zoom);
 }
 
+// GIBS has ~1-2 day data lag; anything newer has no imagery
+const _GIBS_MAX_DATE = (() => {
+  const d = new Date(); d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+})();
+
+// Check if a canvas is essentially blank (for PNG overlay layers where no-data = transparent)
+function _isCanvasBlank(canvas) {
+  try {
+    const { data, width, height } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    let nonEmpty = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 15) nonEmpty++;
+    return nonEmpty / (width * height) < 0.02; // < 2% non-transparent pixels = no data
+  } catch(e) { return false; } // tainted canvas — assume has data
+}
+
+// Check if a JPEG canvas is essentially uniform color (GIBS blank-tile placeholder)
+function _isJpegCanvasBlank(canvas) {
+  try {
+    const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    // Sample every ~50th pixel for variance
+    let sumR = 0, sumG = 0, sumB = 0, n = 0;
+    for (let i = 0; i < data.length; i += 4 * 50) { sumR += data[i]; sumG += data[i+1]; sumB += data[i+2]; n++; }
+    const aR = sumR/n, aG = sumG/n, aB = sumB/n;
+    let variance = 0;
+    for (let i = 0; i < data.length; i += 4 * 50)
+      variance += (data[i]-aR)**2 + (data[i+1]-aG)**2 + (data[i+2]-aB)**2;
+    return (variance / n) < 120; // very low variance = likely solid-color placeholder
+  } catch(e) { return false; }
+}
+
+// Returns candidate dates to try: [0, +1, -1, +2, -2, ...]
+function _candidateDates(dateStr, radius = 15) {
+  const base = new Date(dateStr + 'T12:00:00Z');
+  return [0, ...Array.from({length: radius}, (_, i) => [i+1, -(i+1)]).flat()].map(offset => {
+    const d = new Date(base); d.setUTCDate(d.getUTCDate() + offset);
+    return d.toISOString().slice(0, 10);
+  });
+}
+
+// Stitch GIBS tiles, searching nearby dates if the exact date has no data.
+// Returns {canvas, usedDate} or null.
+async function _stitchGibsNearest(layerName, requestedDate, bbox, isPng, satStartDate) {
+  const minDate = satStartDate || '2000-01-01';
+  for (const tryDate of _candidateDates(requestedDate)) {
+    if (tryDate > _GIBS_MAX_DATE || tryDate < minDate) continue; // skip future / pre-launch
+    const canvas = await _stitchGibs(layerName, tryDate, bbox, isPng);
+    if (!canvas) continue;
+    if (isPng  && _isCanvasBlank(canvas))     continue; // overlay with no data → try next
+    if (!isPng && _isJpegCanvasBlank(canvas)) continue; // JPEG placeholder → try next
+    return { canvas, usedDate: tryDate };
+  }
+  return null;
+}
+
 // ESRI tiles (current imagery, supports CORS)
 async function _stitchEsri(bbox) {
   const zoom = _bboxZoom(bbox, 17);
@@ -637,38 +692,46 @@ function getLayerStack() {
   return [layer.gibsLayer];
 }
 
-// Main image URL resolver — tile-stitch first, WMS as fallback
+// Main image URL resolver — tile-stitch with nearest-date search, WMS as last fallback.
+// Returns {url: string, usedDate: string|null}
 async function resolveImageUrl(sat, layer, gibsLayers, slot, bbox) {
   if (sat.provider === 'google') {
-    return buildGoogleTileUrl(bbox); // no CORS, raw tile URL
+    return { url: buildGoogleTileUrl(bbox), usedDate: null };
   }
 
   if (sat.provider === 'esri') {
     const c = await _stitchEsri(bbox);
-    return c ? c.toDataURL('image/jpeg', 0.88) : buildEsriUrl(bbox, 512);
+    return { url: c ? c.toDataURL('image/jpeg', 0.88) : buildEsriUrl(bbox, 512), usedDate: null };
   }
 
-  // GIBS-based satellite
+  // GIBS-based satellite — use nearest-date search
+  const satStartDate = sat.startDate || '2000-01-01';
+
   if (layer.type === 'overlay' && gibsLayers.length > 1) {
-    const [baseC, overlayC] = await Promise.all([
-      _stitchGibs(gibsLayers[0], slot.date, bbox, false),
-      _stitchGibs(gibsLayers[1], slot.date, bbox, true)
-    ]);
-    if (baseC) {
+    // Stitch base + overlay independently (may settle on different nearby dates)
+    const baseResult    = await _stitchGibsNearest(gibsLayers[0], slot.date, bbox, false, satStartDate);
+    const overlayResult = await _stitchGibsNearest(gibsLayers[1], slot.date, bbox, true,  satStartDate);
+
+    if (baseResult) {
       const out = document.createElement('canvas');
       out.width = out.height = 512;
       const ctx = out.getContext('2d');
-      ctx.drawImage(baseC, 0, 0, 512, 512);
-      if (overlayC) { ctx.globalAlpha = 0.85; ctx.drawImage(overlayC, 0, 0, 512, 512); }
-      return out.toDataURL('image/jpeg', 0.88);
+      ctx.drawImage(baseResult.canvas, 0, 0, 512, 512);
+      if (overlayResult) { ctx.globalAlpha = 0.85; ctx.drawImage(overlayResult.canvas, 0, 0, 512, 512); }
+      return { url: out.toDataURL('image/jpeg', 0.88), usedDate: baseResult.usedDate };
     }
-    return buildWmsUrl(gibsLayers, slot.date, bbox, 512); // WMS fallback
+    // WMS fallback (clamp to max available date)
+    const fallbackDate = slot.date > _GIBS_MAX_DATE ? _GIBS_MAX_DATE : slot.date;
+    return { url: buildWmsUrl(gibsLayers, fallbackDate, bbox, 512), usedDate: fallbackDate };
   }
 
   // Single GIBS layer
   const isPng = layer.format === 'png';
-  const c = await _stitchGibs(gibsLayers[0], slot.date, bbox, isPng);
-  return c ? c.toDataURL('image/jpeg', 0.88) : buildWmsUrl(gibsLayers, slot.date, bbox, 512);
+  const result = await _stitchGibsNearest(gibsLayers[0], slot.date, bbox, isPng, satStartDate);
+  if (result) return { url: result.canvas.toDataURL('image/jpeg', 0.88), usedDate: result.usedDate };
+
+  const fallbackDate = slot.date > _GIBS_MAX_DATE ? _GIBS_MAX_DATE : slot.date;
+  return { url: buildWmsUrl(gibsLayers, fallbackDate, bbox, 512), usedDate: fallbackDate };
 }
 
 // ---- Load Images ----
@@ -708,20 +771,32 @@ async function loadImages() {
   // Fetch all images in parallel — each card updates as its tiles arrive
   await Promise.all(
     state.loadedSlots.map(async (slot, i) => {
-      const url = await resolveImageUrl(sat, layer, gibsLayers, slot, state.bbox);
-      slot.imageUrl = url;
-      setCardImage(i, url);
+      const { url, usedDate } = await resolveImageUrl(sat, layer, gibsLayers, slot, state.bbox);
+      slot.imageUrl  = url;
+      slot.usedDate  = usedDate;
+      setCardImage(i, url, usedDate, slot.date);
     })
   );
 }
 
-// Update a rendered card with its resolved image URL / data URL
-function setCardImage(idx, url) {
+// Update a rendered card with its resolved image URL / data URL.
+// usedDate is the date that actually had imagery (may differ from requestedDate).
+function setCardImage(idx, url, usedDate, requestedDate) {
   const card = document.querySelector(`.image-card[data-index="${idx}"]`);
   if (!card) return;
   const img     = card.querySelector('.card-image');
   const loading = card.querySelector('.card-img-loading');
   const noData  = card.querySelector('.card-no-data');
+  const dateEl  = card.querySelector('.card-date');
+
+  // Show the actual date used; flag when it differs from what was requested
+  if (usedDate && dateEl && !card.querySelector('.card-date').textContent.startsWith('⚡')) {
+    if (usedDate !== requestedDate) {
+      dateEl.textContent = usedDate;
+      dateEl.title = `Nearest imagery to ${requestedDate}`;
+      dateEl.classList.add('date-adjusted');
+    }
+  }
 
   if (!url) {
     loading.style.display = 'none';
@@ -730,14 +805,14 @@ function setCardImage(idx, url) {
   }
 
   if (url.startsWith('data:')) {
-    // Canvas data URL — pixels are already here, no network wait
+    // Canvas data URL — pixels already here, instant display
     img.src = url;
     loading.style.display = 'none';
     img.style.display     = 'block';
     return;
   }
 
-  // External URL (Google tile, WMS fallback) — network load with timeout
+  // External URL (Google tile, WMS fallback) — wait for network with timeout
   const t = setTimeout(() => {
     loading.style.display = 'none';
     noData.style.display  = 'flex';
