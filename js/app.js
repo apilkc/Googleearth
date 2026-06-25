@@ -495,27 +495,116 @@ function applyPreset(presetKey) {
   showToast(`Applied "${preset.name}" preset — adjust dates as needed`, 'info');
 }
 
-// ---- WMS Image URL (NASA GIBS) ----
+// ============================================================
+// IMAGE FETCHING — Tile stitching (fast CDN tiles → canvas)
+// Falls back to WMS if tiles can't be drawn (e.g. no CORS).
+// ============================================================
+
+// Tile coordinate math (Web Mercator / EPSG:3857)
+function _lon2tile(lon, z) { return Math.floor((lon + 180) / 360 * (1 << z)); }
+function _lat2tile(lat, z) {
+  const r = lat * Math.PI / 180;
+  return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * (1 << z));
+}
+function _tile2lon(x, z) { return x / (1 << z) * 360 - 180; }
+function _tile2lat(y, z) {
+  const n = Math.PI * (1 - 2 * y / (1 << z));
+  return Math.atan(Math.sinh(n)) * 180 / Math.PI;
+}
+function _bboxZoom(bbox, maxZ) {
+  const span = Math.max(bbox[2] - bbox[0], bbox[3] - bbox[1]);
+  const z = span > 30 ? 4 : span > 15 ? 5 : span > 8 ? 6 : span > 4 ? 7 : span > 2 ? 8 : span > 1 ? 9 : 10;
+  return Math.min(z, maxZ);
+}
+
+// Stitch tiles into a cropped 512×512 canvas. Returns canvas or null on failure.
+async function _stitchToCanvas(bbox, tileUrlFn, zoom) {
+  const [w, s, e, n] = bbox;
+  const xMin = _lon2tile(w, zoom), xMax = _lon2tile(e, zoom);
+  const yMin = _lat2tile(n, zoom), yMax = _lat2tile(s, zoom); // y increases downward
+  const cols = xMax - xMin + 1, rows = yMax - yMin + 1;
+  if (cols * rows > 25) return null; // too many tiles, skip
+
+  const T = 256;
+  const raw = document.createElement('canvas');
+  raw.width = cols * T; raw.height = rows * T;
+  const ctx = raw.getContext('2d');
+
+  try {
+    const tasks = [];
+    for (let x = xMin; x <= xMax; x++) {
+      for (let y = yMin; y <= yMax; y++) {
+        tasks.push(new Promise(res => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload  = () => { ctx.drawImage(img, (x - xMin) * T, (y - yMin) * T, T, T); res(); };
+          img.onerror = () => res();
+          img.src = tileUrlFn(x, y, zoom);
+        }));
+      }
+    }
+    await Promise.all(tasks);
+
+    // Crop stitched canvas to exact bbox
+    const lonW = _tile2lon(xMin,     zoom), lonE = _tile2lon(xMax + 1, zoom);
+    const latN = _tile2lat(yMin,     zoom), latS = _tile2lat(yMax + 1, zoom);
+    const rw = raw.width, rh = raw.height;
+    const px = Math.round((w - lonW) / (lonE - lonW) * rw);
+    const py = Math.round((latN - n) / (latN - latS) * rh);
+    const pw = Math.max(1, Math.round((e - w)   / (lonE - lonW) * rw));
+    const ph = Math.max(1, Math.round((n - s)   / (latN - latS) * rh));
+
+    const out = document.createElement('canvas');
+    out.width = out.height = 512;
+    out.getContext('2d').drawImage(raw, px, py, pw, ph, 0, 0, 512, 512);
+    return out;
+  } catch (err) {
+    return null; // tainted canvas or other error → caller will use WMS fallback
+  }
+}
+
+// GIBS WMTS tiles (date-specific, max zoom 9, supports CORS)
+async function _stitchGibs(layerName, date, bbox, isPng) {
+  const zoom = _bboxZoom(bbox, 9);
+  const ext  = isPng ? 'png' : 'jpg';
+  const fn   = (x, y, z) =>
+    `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layerName}/default/${date}/GoogleMapsCompatible_Level9/${z}/${y}/${x}.${ext}`;
+  return _stitchToCanvas(bbox, fn, zoom);
+}
+
+// ESRI tiles (current imagery, supports CORS)
+async function _stitchEsri(bbox) {
+  const zoom = _bboxZoom(bbox, 17);
+  const fn   = (x, y, z) =>
+    `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+  return _stitchToCanvas(bbox, fn, zoom);
+}
+
+// Sentinel-2 Cloudless tiles (supports CORS)
+async function _stitchSentinel(bbox) {
+  const zoom = _bboxZoom(bbox, 14);
+  const fn   = (x, y, z) =>
+    `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2022_3857/default/g/${z}/${y}/${x}.jpg`;
+  return _stitchToCanvas(bbox, fn, zoom);
+}
+
+// WMS fallback URL (GIBS GetMap — slower, but handles edge cases)
 function buildWmsUrl(gibsLayers, date, bbox, size) {
   const [w, s, e, n] = bbox;
-  const layerStr = Array.isArray(gibsLayers) ? gibsLayers.join(',') : gibsLayers;
+  const layerStr  = Array.isArray(gibsLayers) ? gibsLayers.join(',') : gibsLayers;
   const hasOverlay = Array.isArray(gibsLayers) && gibsLayers.length > 1;
-  const format = hasOverlay ? 'image%2Fpng' : 'image%2Fjpeg';
-
+  const format    = hasOverlay ? 'image%2Fpng' : 'image%2Fjpeg';
   return (
     `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?` +
     `SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap` +
     `&LAYERS=${encodeURIComponent(layerStr)}` +
-    `&SRS=EPSG:4326` +
-    `&BBOX=${w},${s},${e},${n}` +
+    `&SRS=EPSG:4326&BBOX=${w},${s},${e},${n}` +
     `&WIDTH=${size}&HEIGHT=${size}` +
-    `&TIME=${date}T00:00:00Z` +
-    `&FORMAT=${format}` +
-    `&TRANSPARENT=TRUE`
+    `&TIME=${date}T00:00:00Z&FORMAT=${format}&TRANSPARENT=TRUE`
   );
 }
 
-// ---- ESRI ArcGIS Export URL ----
+// ESRI ArcGIS Export fallback
 function buildEsriUrl(bbox, size) {
   const [w, s, e, n] = bbox;
   return (
@@ -524,33 +613,62 @@ function buildEsriUrl(bbox, size) {
   );
 }
 
-// ---- Google Satellite Tile URL ----
-// Google has no public image-export endpoint; we show the best-fitting tile for the bbox.
+// Google: single best-fitting tile (no CORS → can't use canvas)
 function buildGoogleTileUrl(bbox) {
   const [w, s, e, n] = bbox;
-  const lat = (s + n) / 2;
-  const lon = (w + e) / 2;
+  const lat  = (s + n) / 2, lon = (w + e) / 2;
   const span = Math.max(e - w, n - s);
   const zoom = span > 20 ? 5 : span > 10 ? 6 : span > 5 ? 7 : span > 2 ? 8 : span > 1 ? 9 : 10;
-  const x = Math.floor((lon + 180) / 360 * Math.pow(2, zoom));
-  const latRad = lat * Math.PI / 180;
-  const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * Math.pow(2, zoom));
+  const x = Math.floor((lon + 180) / 360 * (1 << zoom));
+  const r = lat * Math.PI / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * (1 << zoom));
   return `https://mt0.google.com/vt/lyrs=s&x=${x}&y=${y}&z=${zoom}`;
 }
 
 function getLayerStack() {
   const sat = SATELLITES.find(s => s.id === state.satellite);
-  if (!sat) return [];
-  // Non-GIBS providers handle their own URL building
-  if (sat.provider) return [];
+  if (!sat || sat.provider) return [];
   const layer = sat.layers.find(l => l.id === state.layer);
   if (!layer) return [];
-
   if (layer.type === 'overlay' && layer.basePair) {
     const base = sat.layers.find(l => l.id === layer.basePair);
     if (base) return [base.gibsLayer, layer.gibsLayer];
   }
   return [layer.gibsLayer];
+}
+
+// Main image URL resolver — tile-stitch first, WMS as fallback
+async function resolveImageUrl(sat, layer, gibsLayers, slot, bbox) {
+  if (sat.provider === 'google') {
+    return buildGoogleTileUrl(bbox); // no CORS, raw tile URL
+  }
+
+  if (sat.provider === 'esri') {
+    const c = await _stitchEsri(bbox);
+    return c ? c.toDataURL('image/jpeg', 0.88) : buildEsriUrl(bbox, 512);
+  }
+
+  // GIBS-based satellite
+  if (layer.type === 'overlay' && gibsLayers.length > 1) {
+    const [baseC, overlayC] = await Promise.all([
+      _stitchGibs(gibsLayers[0], slot.date, bbox, false),
+      _stitchGibs(gibsLayers[1], slot.date, bbox, true)
+    ]);
+    if (baseC) {
+      const out = document.createElement('canvas');
+      out.width = out.height = 512;
+      const ctx = out.getContext('2d');
+      ctx.drawImage(baseC, 0, 0, 512, 512);
+      if (overlayC) { ctx.globalAlpha = 0.85; ctx.drawImage(overlayC, 0, 0, 512, 512); }
+      return out.toDataURL('image/jpeg', 0.88);
+    }
+    return buildWmsUrl(gibsLayers, slot.date, bbox, 512); // WMS fallback
+  }
+
+  // Single GIBS layer
+  const isPng = layer.format === 'png';
+  const c = await _stitchGibs(gibsLayers[0], slot.date, bbox, isPng);
+  return c ? c.toDataURL('image/jpeg', 0.88) : buildWmsUrl(gibsLayers, slot.date, bbox, 512);
 }
 
 // ---- Load Images ----
@@ -563,44 +681,71 @@ async function loadImages() {
     showToast('Please add at least one date to the timeline.', 'error');
     return;
   }
-
-  const invalidSlots = state.slots.filter(s => !s.date);
-  if (invalidSlots.length > 0) {
+  if (state.slots.some(s => !s.date)) {
     showToast('Please fill in all dates in the timeline.', 'error');
     return;
   }
 
-  showLoading(true, 'Preparing imagery requests...');
-
-  const sat = SATELLITES.find(s => s.id === state.satellite);
-  const layer = sat.layers.find(l => l.id === state.layer);
+  const sat        = SATELLITES.find(s => s.id === state.satellite);
+  const layer      = sat.layers.find(l => l.id === state.layer);
   const gibsLayers = getLayerStack();
 
-  state.loadedSlots = state.slots.map((slot, i) => {
-    let url;
-    if (sat.provider === 'esri') {
-      url = buildEsriUrl(state.bbox, state.imageSize);
-    } else if (sat.provider === 'google') {
-      url = buildGoogleTileUrl(state.bbox);
-    } else {
-      url = buildWmsUrl(gibsLayers, slot.date, state.bbox, state.imageSize);
-    }
-    return {
-      ...slot,
-      imageUrl: url,
-      satelliteName: sat.name,
-      layerName: layer.name,
-      bbox: [...state.bbox],
-      index: i,
-      liveOnly: !!sat.liveOnly
-    };
-  });
+  // Initialise slots with empty imageUrl — cards render immediately with spinners
+  state.loadedSlots = state.slots.map((slot, i) => ({
+    ...slot,
+    imageUrl:      '',
+    satelliteName: sat.name,
+    layerName:     layer.name,
+    bbox:          [...state.bbox],
+    index:         i,
+    liveOnly:      !!sat.liveOnly
+  }));
 
-  showLoading(false);
   renderImageGrid();
   enableActionButtons();
-
   document.getElementById('images-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // Fetch all images in parallel — each card updates as its tiles arrive
+  await Promise.all(
+    state.loadedSlots.map(async (slot, i) => {
+      const url = await resolveImageUrl(sat, layer, gibsLayers, slot, state.bbox);
+      slot.imageUrl = url;
+      setCardImage(i, url);
+    })
+  );
+}
+
+// Update a rendered card with its resolved image URL / data URL
+function setCardImage(idx, url) {
+  const card = document.querySelector(`.image-card[data-index="${idx}"]`);
+  if (!card) return;
+  const img     = card.querySelector('.card-image');
+  const loading = card.querySelector('.card-img-loading');
+  const noData  = card.querySelector('.card-no-data');
+
+  if (!url) {
+    loading.style.display = 'none';
+    noData.style.display  = 'flex';
+    return;
+  }
+
+  if (url.startsWith('data:')) {
+    // Canvas data URL — pixels are already here, no network wait
+    img.src = url;
+    loading.style.display = 'none';
+    img.style.display     = 'block';
+    return;
+  }
+
+  // External URL (Google tile, WMS fallback) — network load with timeout
+  const t = setTimeout(() => {
+    loading.style.display = 'none';
+    noData.style.display  = 'flex';
+    img.style.display     = 'none';
+  }, 15000);
+  img.addEventListener('load',  () => { clearTimeout(t); loading.style.display = 'none'; img.style.display = 'block'; });
+  img.addEventListener('error', () => { clearTimeout(t); loading.style.display = 'none'; noData.style.display = 'flex'; img.style.display = 'none'; });
+  img.src = url;
 }
 
 // ---- Image Grid ----
@@ -640,12 +785,9 @@ function buildImageCard(slot, idx) {
     <div class="card-image-wrapper">
       <div class="card-img-loading">
         <div class="mini-spinner"></div>
-        <span>Loading satellite imagery…</span>
+        <span>Stitching tiles…</span>
       </div>
-      <img class="card-image"
-           src="${slot.imageUrl}"
-           alt="${escHtml(slot.label)} ${slot.date}"
-           loading="lazy">
+      <img class="card-image" src="" alt="${escHtml(slot.label)} ${slot.date}" style="display:none">
       <div class="card-no-data" style="display:none">
         <span>⚠️</span><span>No imagery available for this date/location</span>
       </div>
@@ -659,21 +801,6 @@ function buildImageCard(slot, idx) {
       <span class="card-sat-tag">${slot.satelliteName}</span>
       <span class="card-layer-tag">${slot.layerName}</span>
     </div>`;
-
-  const img = card.querySelector('.card-image');
-  const loadingEl = card.querySelector('.card-img-loading');
-  const noDataEl = card.querySelector('.card-no-data');
-
-  img.addEventListener('load', () => {
-    loadingEl.style.display = 'none';
-    img.style.display = 'block';
-  });
-
-  img.addEventListener('error', () => {
-    loadingEl.style.display = 'none';
-    noDataEl.style.display = 'flex';
-    img.style.display = 'none';
-  });
 
   // Actions
   card.querySelectorAll('.card-action-btn').forEach(btn => {
