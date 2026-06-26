@@ -29,6 +29,7 @@ const state = {
   slotIdCounter: 0,
 
   compareMode: 'slider',
+  cardAspect: 1,
 };
 
 // ---- Init ----
@@ -401,9 +402,8 @@ function updateSatInfo(sat) {
 // ---- Timeline Slots ----
 function addDefaultSlots() {
   const today = new Date();
-  addSlot('Pre-Disaster',   offsetDate(today, -30), null,  false);
-  addSlot('Disaster Event', offsetDate(today, -7),  0,     true);
-  addSlot('Post-Disaster',  formatDate(today),       7,    false);
+  addSlot('3 Years Ago',  offsetDate(today, -365 * 3), null, false);
+  addSlot('Today',        formatDate(today),             0,   true);
 }
 
 // daysOffset: null = manual slot (no cascade), number = days from event slot
@@ -714,31 +714,23 @@ async function _fetchWaybackReleases() {
 
   _waybackFetchOnce = (async () => {
     try {
-      const url =
-        'https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS' +
-        '?request=getinfo&client=jsapi&type=dates&f=json';
-      const r = await fetch(url, { mode: 'cors' });
+      // Public S3 config file — static, no auth required, full CORS support
+      const url = 'https://s3-us-west-2.amazonaws.com/config.maptiles.arcgis.com/waybackconfig.json';
+      const r = await fetch(url);
       if (!r.ok) throw new Error(r.status);
       const data = await r.json();
-      if (!Array.isArray(data)) throw new Error('unexpected format');
-
-      _waybackReleases = data.map(item => {
-        // ESRI returns releaseNum or releaseid depending on version
-        const num = item.releaseNum ?? item.releaseid ?? item.release;
-        // releaseDatetime may be "YYYYMMDD", ISO string, or display string
-        const raw = item.releaseDatetime || item.displayDate || '';
-        let date;
-        if (/^\d{8}$/.test(raw)) {
-          date = new Date(`${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}T12:00:00Z`);
-        } else {
-          date = new Date(raw);
-        }
-        return (!num || isNaN(date)) ? null : { num, date };
+      // data is { "releaseNum": { itemTitle: "World Imagery (Wayback YYYY-MM-DD)", itemURL: ".../{level}/{row}/{col}" } }
+      _waybackReleases = Object.entries(data).map(([key, val]) => {
+        const num = parseInt(key, 10);
+        const m = (val.itemTitle || '').match(/\(Wayback (\d{4}-\d{2}-\d{2})\)/);
+        if (!m || isNaN(num)) return null;
+        const date = new Date(m[1] + 'T12:00:00Z');
+        return { num, date };
       }).filter(Boolean).sort((a, b) => a.date - b.date);
 
       return _waybackReleases;
     } catch (e) {
-      console.warn('Wayback releases fetch failed:', e.message);
+      console.warn('Wayback config fetch failed:', e.message);
       _waybackReleases = [];
       return [];
     }
@@ -844,7 +836,9 @@ async function resolveImageUrl(sat, layer, gibsLayers, slot, bbox) {
     // Wayback API is unreachable (CORS, network, etc.).
     const result = await _stitchWayback(bbox, slot.date);
     if (result) return { url: result.canvas.toDataURL('image/jpeg', 0.88), usedDate: result.usedDate };
-    // Wayback unavailable — fall through to live ESRI
+    // Wayback tiles unavailable — fall back to live ESRI (all dates will look identical)
+    console.warn('Wayback tiles failed for', slot.date, '— falling back to live ESRI');
+    showToast('Wayback archive unavailable — showing current imagery instead.', 'warning', 6000);
     const c = await _stitchEsri(bbox);
     return { url: c ? c.toDataURL('image/jpeg', 0.88) : buildEsriUrl(bbox, 512), usedDate: null };
   }
