@@ -685,9 +685,12 @@ async function _stitchGibsNearest(layerName, requestedDate, bbox, isPng, satStar
   return null;
 }
 
-// ESRI tiles (current imagery, supports CORS)
+// ESRI tiles (current imagery, supports CORS, max zoom ~19)
 async function _stitchEsri(bbox) {
-  const zoom = _bboxZoom(bbox, 17);
+  // Cap at the current map zoom so image detail matches what the user sees.
+  // Allow up to zoom 19 (ESRI's practical max) regardless of map zoom.
+  const mapZ = state.map ? state.map.getZoom() : 17;
+  const zoom = _bboxZoom(bbox, Math.min(19, Math.max(mapZ, 10)));
   const fn   = (x, y, z) =>
     `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
   return _stitchToCanvas(bbox, fn, zoom);
@@ -726,12 +729,12 @@ function buildEsriUrl(bbox, size) {
   );
 }
 
-// Google: single best-fitting tile (no CORS → can't use canvas)
+// Google: single best-fitting tile (no CORS → can't canvas-stitch).
+// Uses the current map zoom so the tile matches what the user sees.
 function buildGoogleTileUrl(bbox) {
   const [w, s, e, n] = bbox;
   const lat  = (s + n) / 2, lon = (w + e) / 2;
-  const span = Math.max(e - w, n - s);
-  const zoom = span > 20 ? 5 : span > 10 ? 6 : span > 5 ? 7 : span > 2 ? 8 : span > 1 ? 9 : 10;
+  const zoom = state.map ? Math.min(20, Math.max(1, state.map.getZoom())) : 15;
   const x = Math.floor((lon + 180) / 360 * (1 << zoom));
   const r = lat * Math.PI / 180;
   const y = Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * (1 << zoom));
@@ -754,7 +757,13 @@ function getLayerStack() {
 // Returns {url: string, usedDate: string|null}
 async function resolveImageUrl(sat, layer, gibsLayers, slot, bbox) {
   if (sat.provider === 'google') {
-    return { url: buildGoogleTileUrl(bbox), usedDate: null };
+    // Google tiles have no CORS headers so canvas-stitching is blocked.
+    // ESRI World Imagery has equivalent quality and supports CORS — use it
+    // to produce a properly zoomed, viewport-matched canvas.
+    // Fall back to a single Google tile (may not fill the full viewport)
+    // only if ESRI stitching fails.
+    const c = await _stitchEsri(bbox);
+    return { url: c ? c.toDataURL('image/jpeg', 0.88) : buildGoogleTileUrl(bbox), usedDate: null };
   }
 
   if (sat.provider === 'esri') {
