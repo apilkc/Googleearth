@@ -316,6 +316,30 @@ const SATELLITES = [
     ]
   },
   {
+    id: 'esri_wayback',
+    name: 'Imagery Archive',
+    agency: 'ESRI Wayback',
+    iconClass: 'sat-icon-esri',
+    description: 'Dated snapshots of high-resolution satellite imagery (~0.5m). Archive of imagery updates since Feb 2014. Shows actual changes between dates.',
+    revisit: 'Snapshots',
+    resolution: '~0.5m',
+    startDate: '2014-02-20',
+    coverage: 'Global',
+    provider: 'wayback',
+    layers: [
+      {
+        id: 'world_imagery',
+        name: 'True Color',
+        icon: '🗃️',
+        gibsLayer: null,
+        format: 'jpeg',
+        description: 'Historical high-res imagery snapshots. Different dates will show actual imagery changes over time.',
+        type: 'base',
+        usecase: 'Before/After'
+      }
+    ]
+  },
+  {
     id: 'esri_world',
     name: 'ESRI World Imagery',
     agency: 'ESRI/Maxar',
@@ -370,8 +394,8 @@ const SATELLITES = [
 const DISASTER_PRESETS = {
   flood: {
     name: 'Flood Disaster',
-    satellite: 'modis_terra',
-    layer: 'flood',
+    satellite: 'esri_wayback',
+    layer: 'world_imagery',
     color: '#4a9eff',
     timelineSlots: [
       { label: 'Pre-Flood: 30 Days', daysOffset: -30 },
@@ -398,8 +422,8 @@ const DISASTER_PRESETS = {
   },
   earthquake: {
     name: 'Earthquake',
-    satellite: 'modis_terra',
-    layer: 'true_color',
+    satellite: 'esri_wayback',
+    layer: 'world_imagery',
     color: '#f39c12',
     timelineSlots: [
       { label: 'Pre-Quake: 1 Year',  daysOffset: -365 },

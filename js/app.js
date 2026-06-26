@@ -16,8 +16,8 @@ const state = {
   drawTempRect: null,
   viewportRect: null,
 
-  satellite: 'modis_terra',
-  layer: 'true_color',
+  satellite: 'esri_wayback',
+  layer: 'world_imagery',
   basemap: 'google',
   drawConstraint: 'rect', // 'rect' | 'square'
 
@@ -702,6 +702,81 @@ async function _stitchEsri(bbox) {
   return _stitchToCanvas(bbox, fn, zoom);
 }
 
+// ---- ESRI Wayback (dated high-res imagery archive, 2014→present) ----
+// Release list is fetched once and cached. Each release is a dated snapshot
+// of ESRI's World Imagery basemap — different releases show actual imagery changes.
+let _waybackReleases   = null;  // [{num, date}] sorted ascending
+let _waybackFetchOnce  = null;  // shared promise so only one fetch is in flight
+
+async function _fetchWaybackReleases() {
+  if (_waybackReleases) return _waybackReleases;
+  if (_waybackFetchOnce) return _waybackFetchOnce;
+
+  _waybackFetchOnce = (async () => {
+    try {
+      const url =
+        'https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS' +
+        '?request=getinfo&client=jsapi&type=dates&f=json';
+      const r = await fetch(url, { mode: 'cors' });
+      if (!r.ok) throw new Error(r.status);
+      const data = await r.json();
+      if (!Array.isArray(data)) throw new Error('unexpected format');
+
+      _waybackReleases = data.map(item => {
+        // ESRI returns releaseNum or releaseid depending on version
+        const num = item.releaseNum ?? item.releaseid ?? item.release;
+        // releaseDatetime may be "YYYYMMDD", ISO string, or display string
+        const raw = item.releaseDatetime || item.displayDate || '';
+        let date;
+        if (/^\d{8}$/.test(raw)) {
+          date = new Date(`${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}T12:00:00Z`);
+        } else {
+          date = new Date(raw);
+        }
+        return (!num || isNaN(date)) ? null : { num, date };
+      }).filter(Boolean).sort((a, b) => a.date - b.date);
+
+      return _waybackReleases;
+    } catch (e) {
+      console.warn('Wayback releases fetch failed:', e.message);
+      _waybackReleases = [];
+      return [];
+    }
+  })();
+
+  return _waybackFetchOnce;
+}
+
+// Find the most recent Wayback release on-or-before requestedDate.
+// Falls back to the oldest available if the date pre-dates the archive.
+async function _findWaybackRelease(dateStr) {
+  const releases = await _fetchWaybackReleases();
+  if (!releases.length) return null;
+  const target = new Date(dateStr + 'T12:00:00Z');
+  let best = releases[0];                     // oldest — used when date < archive start
+  for (const r of releases) {
+    if (r.date <= target) best = r;
+    else break;
+  }
+  return best;
+}
+
+// Stitch Wayback tiles for the closest release to requestedDate.
+async function _stitchWayback(bbox, dateStr) {
+  const release = await _findWaybackRelease(dateStr);
+  if (!release) return null;
+
+  const mapZ = state.map ? state.map.getZoom() : 17;
+  const zoom = _bboxZoom(bbox, Math.min(21, Math.max(mapZ, 10)));
+  const fn   = (x, y, z) =>
+    `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS` +
+    `/1.0.0/default028mm/MapServer/tile/${release.num}/${z}/${y}/${x}`;
+  const canvas = await _stitchToCanvas(bbox, fn, zoom);
+  if (!canvas) return null;
+  const usedDate = release.date.toISOString().slice(0, 10);
+  return { canvas, usedDate };
+}
+
 // Sentinel-2 Cloudless tiles (supports CORS)
 async function _stitchSentinel(bbox) {
   const zoom = _bboxZoom(bbox, 14);
@@ -762,6 +837,18 @@ function getLayerStack() {
 // Main image URL resolver — tile-stitch with nearest-date search, WMS as last fallback.
 // Returns {url: string, usedDate: string|null}
 async function resolveImageUrl(sat, layer, gibsLayers, slot, bbox) {
+  if (sat.provider === 'wayback') {
+    // ESRI Wayback: dated snapshots of high-res imagery since Feb 2014.
+    // Find the most recent Wayback release on-or-before the requested date,
+    // then stitch tiles from that release. Falls back to live ESRI if the
+    // Wayback API is unreachable (CORS, network, etc.).
+    const result = await _stitchWayback(bbox, slot.date);
+    if (result) return { url: result.canvas.toDataURL('image/jpeg', 0.88), usedDate: result.usedDate };
+    // Wayback unavailable — fall through to live ESRI
+    const c = await _stitchEsri(bbox);
+    return { url: c ? c.toDataURL('image/jpeg', 0.88) : buildEsriUrl(bbox, 512), usedDate: null };
+  }
+
   if (sat.provider === 'google') {
     // Google tiles have no CORS headers so canvas-stitching is blocked.
     // ESRI World Imagery has equivalent quality and supports CORS — use it
