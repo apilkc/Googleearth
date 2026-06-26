@@ -849,15 +849,35 @@ async function loadImages() {
     liveOnly:      !!sat.liveOnly
   }));
 
-  // Snap the map to exactly the bbox being loaded so the top view always matches the images.
-  state.map.fitBounds(
-    [[activeBbox[1], activeBbox[0]], [activeBbox[3], activeBbox[2]]],
-    { animate: false, padding: [0, 0] }
-  );
+  // Only call fitBounds when the user drew an explicit bbox — it snaps the map to that region.
+  // When using the live viewport, skip fitBounds: Leaflet rounds the computed zoom down by 1
+  // (floating-point in getBoundsZoom), so the map would shift to zoom N-1 and tile stitching
+  // would read that lower zoom, capping images one level below the actual map zoom.
+  if (state.bbox) {
+    state.map.fitBounds(
+      [[activeBbox[1], activeBbox[0]], [activeBbox[3], activeBbox[2]]],
+      { animate: false, padding: [0, 0] }
+    );
+  }
 
   renderImageGrid();
   enableActionButtons();
   document.getElementById('images-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // Warn when the selected satellite shows only current (live) imagery.
+  // All timeline cards will be identical — user needs MODIS/VIIRS for date comparisons.
+  if (sat.liveOnly) {
+    showToast(
+      `⚡ ${sat.name} shows only current imagery — all ${state.loadedSlots.length} cards will look identical. ` +
+      'Switch to MODIS Terra or VIIRS NOAA-20 for date-specific historical comparisons.',
+      'warning', 8000
+    );
+    const banner = document.getElementById('live-only-banner');
+    if (banner) banner.style.display = 'flex';
+  } else {
+    const banner = document.getElementById('live-only-banner');
+    if (banner) banner.style.display = 'none';
+  }
 
   // Fetch all images in parallel — each card updates as its tiles arrive
   await Promise.all(
@@ -1152,7 +1172,7 @@ function showLoading(show, text = 'Loading satellite imagery...') {
 }
 
 // ---- Toast Notifications ----
-function showToast(message, type = 'info') {
+function showToast(message, type = 'info', duration = 3000) {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
@@ -1162,7 +1182,7 @@ function showToast(message, type = 'info') {
   setTimeout(() => {
     toast.classList.remove('visible');
     setTimeout(() => toast.remove(), 300);
-  }, 3000);
+  }, duration);
 }
 
 // ---- Sidebar (mobile) ----

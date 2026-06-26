@@ -808,6 +808,23 @@ input[type="range"]::-webkit-slider-thumb {
   line-height: 1.5;
 }
 
+/* Live-only banner */
+.live-only-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 16px 0;
+  padding: 10px 14px;
+  background: rgba(210,153,34,0.12);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.live-only-banner span:first-child { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+.live-only-banner strong { color: #e0c170; }
+
 /* ---- IMAGE GRID ---- */
 .images-grid {
   padding: 14px;
