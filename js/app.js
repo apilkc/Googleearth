@@ -645,12 +645,18 @@ function _candidateDates(dateStr, radius = 15) {
 // Returns {canvas, usedDate} or null.
 async function _stitchGibsNearest(layerName, requestedDate, bbox, isPng, satStartDate) {
   const minDate = satStartDate || '2000-01-01';
+  // GIBS zoom-9 tiles are ~0.703°/tile (256 px). When the viewport span is very small
+  // the crop is only a handful of pixels upscaled to 512 — artificially low variance.
+  // Skip the blank check in that case so we don't discard valid (if pixelated) imagery.
+  const tileWidthDeg = 360 / (1 << 9); // ≈ 0.703°
+  const cropPx = Math.max(bbox[2] - bbox[0], bbox[3] - bbox[1]) / tileWidthDeg * 256;
+  const skipBlank = cropPx < 32; // < 32 source pixels → upscale too extreme for variance check
   for (const tryDate of _candidateDates(requestedDate)) {
     if (tryDate > _GIBS_MAX_DATE || tryDate < minDate) continue; // skip future / pre-launch
     const canvas = await _stitchGibs(layerName, tryDate, bbox, isPng);
     if (!canvas) continue;
-    if (isPng  && _isCanvasBlank(canvas))     continue; // overlay with no data → try next
-    if (!isPng && _isJpegCanvasBlank(canvas)) continue; // JPEG placeholder → try next
+    if (!skipBlank && isPng  && _isCanvasBlank(canvas))     continue; // overlay with no data → try next
+    if (!skipBlank && !isPng && _isJpegCanvasBlank(canvas)) continue; // JPEG placeholder → try next
     return { canvas, usedDate: tryDate };
   }
   return null;
@@ -786,25 +792,6 @@ async function loadImages() {
   }
 
   const sat        = SATELLITES.find(s => s.id === state.satellite);
-
-  // GIBS satellites top out at zoom 9 (~250 m/px, ~0.7°/tile).
-  // A viewport smaller than 0.5° would produce a sub-pixel crop that looks like noise.
-  // Expand to a minimum 0.5° span centred on the viewport so images are always meaningful.
-  if (!sat.provider) {
-    const [w, s, e, n] = activeBbox;
-    const cLon = (w + e) / 2, cLat = (s + n) / 2;
-    const span = Math.max(e - w, n - s);
-    const MIN_GIBS_SPAN = 0.5; // ~55 km; good match for 250 m GIBS resolution
-    if (span < MIN_GIBS_SPAN) {
-      const h = MIN_GIBS_SPAN / 2;
-      activeBbox = [
-        +Math.max(-180, cLon - h).toFixed(6),
-        +Math.max(-90,  cLat - h).toFixed(6),
-        +Math.min(180,  cLon + h).toFixed(6),
-        +Math.min(90,   cLat + h).toFixed(6)
-      ];
-    }
-  }
   const layer      = sat.layers.find(l => l.id === state.layer);
   const gibsLayers = getLayerStack();
 
@@ -818,6 +805,12 @@ async function loadImages() {
     index:         i,
     liveOnly:      !!sat.liveOnly
   }));
+
+  // Snap the map to exactly the bbox being loaded so the top view always matches the images.
+  state.map.fitBounds(
+    [[activeBbox[1], activeBbox[0]], [activeBbox[3], activeBbox[2]]],
+    { animate: false, padding: [0, 0] }
+  );
 
   renderImageGrid();
   enableActionButtons();
