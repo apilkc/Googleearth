@@ -606,9 +606,14 @@ async function _stitchToCanvas(bbox, tileUrlFn, zoom) {
     const pw = Math.max(1, Math.round((e - w)   / (lonE - lonW) * rw));
     const ph = Math.max(1, Math.round((n - s)   / (latN - latS) * rh));
 
+    // Preserve the natural pixel aspect ratio of the cropped region so the
+    // output image matches the map viewport proportions without squashing.
+    const maxDim = 512;
+    const outW = pw >= ph ? maxDim : Math.max(1, Math.round(maxDim * pw / ph));
+    const outH = ph >= pw ? maxDim : Math.max(1, Math.round(maxDim * ph / pw));
     const out = document.createElement('canvas');
-    out.width = out.height = 512;
-    out.getContext('2d').drawImage(raw, px, py, pw, ph, 0, 0, 512, 512);
+    out.width = outW; out.height = outH;
+    out.getContext('2d').drawImage(raw, px, py, pw, ph, 0, 0, outW, outH);
     return out;
   } catch (err) {
     return null; // tainted canvas or other error → caller will use WMS fallback
@@ -690,7 +695,8 @@ async function _stitchEsri(bbox) {
   // Cap at the current map zoom so image detail matches what the user sees.
   // Allow up to zoom 19 (ESRI's practical max) regardless of map zoom.
   const mapZ = state.map ? state.map.getZoom() : 17;
-  const zoom = _bboxZoom(bbox, Math.min(19, Math.max(mapZ, 10)));
+  // Allow up to zoom 21 to match the Google Satellite basemap's resolution ceiling.
+  const zoom = _bboxZoom(bbox, Math.min(21, Math.max(mapZ, 10)));
   const fn   = (x, y, z) =>
     `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
   return _stitchToCanvas(bbox, fn, zoom);
@@ -781,10 +787,11 @@ async function resolveImageUrl(sat, layer, gibsLayers, slot, bbox) {
 
     if (baseResult) {
       const out = document.createElement('canvas');
-      out.width = out.height = 512;
+      out.width  = baseResult.canvas.width;
+      out.height = baseResult.canvas.height;
       const ctx = out.getContext('2d');
-      ctx.drawImage(baseResult.canvas, 0, 0, 512, 512);
-      if (overlayResult) { ctx.globalAlpha = 0.85; ctx.drawImage(overlayResult.canvas, 0, 0, 512, 512); }
+      ctx.drawImage(baseResult.canvas, 0, 0, out.width, out.height);
+      if (overlayResult) { ctx.globalAlpha = 0.85; ctx.drawImage(overlayResult.canvas, 0, 0, out.width, out.height); }
       return { url: out.toDataURL('image/jpeg', 0.88), usedDate: baseResult.usedDate };
     }
     // WMS fallback (clamp to max available date)
@@ -826,6 +833,10 @@ async function loadImages() {
   const sat        = SATELLITES.find(s => s.id === state.satellite);
   const layer      = sat.layers.find(l => l.id === state.layer);
   const gibsLayers = getLayerStack();
+
+  // Capture the map's pixel aspect ratio so image cards can match it exactly.
+  const mapSize = state.map.getSize();
+  state.cardAspect = mapSize.x / mapSize.y;
 
   // Initialise slots with empty imageUrl — cards render immediately with spinners
   state.loadedSlots = state.slots.map((slot, i) => ({
@@ -937,7 +948,7 @@ function buildImageCard(slot, idx) {
       <span class="card-label">${escHtml(slot.label)}</span>
       <span class="card-date">${slot.liveOnly ? '⚡ Current' : slot.date}</span>
     </div>
-    <div class="card-image-wrapper">
+    <div class="card-image-wrapper" style="aspect-ratio:${(state.cardAspect || 1).toFixed(4)}">
       <div class="card-img-loading">
         <div class="mini-spinner"></div>
         <span>Stitching tiles…</span>
