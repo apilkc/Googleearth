@@ -6,8 +6,8 @@ const state = {
   map: null,
   basemapLayer: null,
   gibs_layer: null,
-  center: [20, 0],
-  zoom: 3,
+  center: [27.7041, 85.3141],  // Dharahara Tower, Kathmandu
+  zoom: 17,
   bbox: null,           // [west, south, east, north]
   locationMarker: null,
   bboxRect: null,
@@ -39,6 +39,8 @@ document.addEventListener('DOMContentLoaded', () => {
   renderLayerGrid();
   setupEventListeners();
   addDefaultSlots();
+  // Pre-fill location inputs and marker for default Kathmandu view
+  setLocation(state.center[0], state.center[1]);
   // Populate initial satellite info
   const initSat = SATELLITES.find(s => s.id === state.satellite);
   if (initSat) updateSatInfo(initSat);
@@ -402,8 +404,9 @@ function updateSatInfo(sat) {
 // ---- Timeline Slots ----
 function addDefaultSlots() {
   const today = new Date();
-  addSlot('3 Years Ago',  offsetDate(today, -365 * 3), null, false);
-  addSlot('Today',        formatDate(today),             0,   true);
+  addSlot('2015 (Pre-rebuild)',  '2015-06-01', null, false);
+  addSlot('2019 (Mid-rebuild)',  '2019-06-01', null, false);
+  addSlot('Today',               formatDate(today), 0, true);
 }
 
 // daysOffset: null = manual slot (no cascade), number = days from event slot
@@ -754,19 +757,29 @@ async function _findWaybackRelease(dateStr) {
 }
 
 // Stitch Wayback tiles for the closest release to requestedDate.
+// Returns { canvas, usedDate } on success, { directUrl, usedDate } if CORS blocks canvas,
+// or null if the release list is empty.
 async function _stitchWayback(bbox, dateStr) {
   const release = await _findWaybackRelease(dateStr);
   if (!release) return null;
 
   const mapZ = state.map ? state.map.getZoom() : 17;
   const zoom = _bboxZoom(bbox, Math.min(21, Math.max(mapZ, 10)));
-  const fn   = (x, y, z) =>
+  const tileUrl = (x, y, z) =>
     `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS` +
     `/1.0.0/default028mm/MapServer/tile/${release.num}/${z}/${y}/${x}`;
-  const canvas = await _stitchToCanvas(bbox, fn, zoom);
-  if (!canvas) return null;
+
+  const canvas = await _stitchToCanvas(bbox, tileUrl, zoom);
   const usedDate = release.date.toISOString().slice(0, 10);
-  return { canvas, usedDate };
+  if (canvas) return { canvas, usedDate };
+
+  // Canvas stitching failed (tiles may lack CORS headers).
+  // Fall back to the center tile URL loaded directly as <img> — no canvas needed,
+  // no CORS needed, and each release shows genuinely different imagery.
+  const [w, s, e, n] = bbox;
+  const cx = (w + e) / 2, cy = (s + n) / 2;
+  const tx = _lon2tile(cx, zoom), ty = _lat2tile(cy, zoom);
+  return { directUrl: tileUrl(tx, ty, zoom), usedDate };
 }
 
 // Sentinel-2 Cloudless tiles (supports CORS)
@@ -835,9 +848,10 @@ async function resolveImageUrl(sat, layer, gibsLayers, slot, bbox) {
     // then stitch tiles from that release. Falls back to live ESRI if the
     // Wayback API is unreachable (CORS, network, etc.).
     const result = await _stitchWayback(bbox, slot.date);
-    if (result) return { url: result.canvas.toDataURL('image/jpeg', 0.88), usedDate: result.usedDate };
-    // Wayback tiles unavailable — fall back to live ESRI (all dates will look identical)
-    console.warn('Wayback tiles failed for', slot.date, '— falling back to live ESRI');
+    if (result?.canvas)    return { url: result.canvas.toDataURL('image/jpeg', 0.88), usedDate: result.usedDate };
+    if (result?.directUrl) return { url: result.directUrl, usedDate: result.usedDate };
+    // Releases list empty — fall back to live ESRI
+    console.warn('Wayback release not found for', slot.date, '— falling back to live ESRI');
     showToast('Wayback archive unavailable — showing current imagery instead.', 'warning', 6000);
     const c = await _stitchEsri(bbox);
     return { url: c ? c.toDataURL('image/jpeg', 0.88) : buildEsriUrl(bbox, 512), usedDate: null };
