@@ -18,7 +18,8 @@ const state = {
 
   satellite: 'modis_terra',
   layer: 'true_color',
-  basemap: 'gibs',
+  basemap: 'google',
+  drawConstraint: 'rect', // 'rect' | 'square'
 
   slots: [],            // [{id, label, date}]
   loadedSlots: [],      // [{id, label, date, imageUrl, satellite, layer}]
@@ -51,7 +52,7 @@ function initMap() {
     zoomControl: true,
   });
 
-  applyBasemap('gibs');
+  applyBasemap('google');
 
   state.map.on('click', onMapClick);
   state.map.on('zoomend', onZoomEnd);
@@ -178,8 +179,7 @@ function setLocation(lat, lng) {
   state.locationMarker = L.circleMarker([lat, lng], {
     radius: 8, color: '#4a9eff', weight: 3, fillColor: '#4a9eff', fillOpacity: 0.3
   }).addTo(state.map);
-
-  computeBboxFromCenter();
+  // No longer auto-sets a fixed bbox — the live map viewport defines the image extent.
 }
 
 function computeBboxFromCenter() {
@@ -224,12 +224,16 @@ function clearAoi() {
   updateViewportOutline(); // restore live viewport outline
 }
 
-// ---- Draw Rectangle ----
-function startDrawMode() {
+// ---- Draw Rectangle / Square ----
+function startDrawMode(constraint = 'rect') {
+  state.drawConstraint = constraint;
   state.drawingMode = true;
   state.map.getContainer().style.cursor = 'crosshair';
-  document.getElementById('draw-rect-btn').classList.add('active');
+  document.getElementById('draw-rect-btn').classList.toggle('active', constraint === 'rect');
+  document.getElementById('draw-square-btn').classList.toggle('active', constraint === 'square');
   document.getElementById('draw-hint').style.display = 'inline';
+  document.getElementById('draw-hint').textContent =
+    constraint === 'square' ? '— Click & drag to draw square' : '— Click & drag to draw area';
 
   state.map.on('mousedown', onDrawStart);
   state.map.on('mouseup', onDrawEnd);
@@ -241,6 +245,7 @@ function stopDrawMode() {
   state.drawStart = null;
   state.map.getContainer().style.cursor = '';
   document.getElementById('draw-rect-btn').classList.remove('active');
+  document.getElementById('draw-square-btn').classList.remove('active');
   document.getElementById('draw-hint').style.display = 'none';
 
   state.map.off('mousedown', onDrawStart);
@@ -258,24 +263,42 @@ function onDrawStart(e) {
   ).addTo(state.map);
 }
 
+// Constrain latlng to a square (equal km sides) from state.drawStart.
+function _squareEnd(start, cursor) {
+  const dLat = cursor.lat - start.lat;
+  const dLng = cursor.lng - start.lng;
+  // Convert to approximate equal-ground spans using cosine correction at mid-latitude
+  const midLat  = (start.lat + cursor.lat) / 2;
+  const cosLat  = Math.max(Math.cos(midLat * Math.PI / 180), 0.01);
+  const spanLat = Math.abs(dLat);
+  const spanLng = Math.abs(dLng) * cosLat; // longitude degrees → ground-equivalent
+  const size    = Math.max(spanLat, spanLng); // larger side wins
+  return {
+    lat: start.lat + Math.sign(dLat || 1) * size,
+    lng: start.lng + Math.sign(dLng || 1) * size / cosLat
+  };
+}
+
 function updateDrawRect(latlng) {
   if (!state.drawTempRect || !state.drawStart) return;
+  const end = state.drawConstraint === 'square' ? _squareEnd(state.drawStart, latlng) : latlng;
   state.drawTempRect.setBounds([
     [state.drawStart.lat, state.drawStart.lng],
-    [latlng.lat, latlng.lng]
+    [end.lat, end.lng]
   ]);
 }
 
 function onDrawEnd(e) {
   if (!state.drawStart) return;
-  const end = e.latlng;
-  const s = state.drawStart;
-  const w = Math.min(s.lng, end.lng);
-  const e2 = Math.max(s.lng, end.lng);
-  const south = Math.min(s.lat, end.lat);
-  const north = Math.max(s.lat, end.lat);
+  const rawEnd = e.latlng;
+  const end    = state.drawConstraint === 'square' ? _squareEnd(state.drawStart, rawEnd) : rawEnd;
+  const s      = state.drawStart;
+  const w      = Math.min(s.lng, end.lng);
+  const e2     = Math.max(s.lng, end.lng);
+  const south  = Math.min(s.lat, end.lat);
+  const north  = Math.max(s.lat, end.lat);
 
-  if (Math.abs(e2 - w) < 0.01 || Math.abs(north - south) < 0.01) {
+  if (Math.abs(e2 - w) < 0.005 || Math.abs(north - south) < 0.005) {
     stopDrawMode();
     return;
   }
@@ -1176,7 +1199,11 @@ function setupEventListeners() {
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       showToast('Latitude must be -90–90, longitude -180–180.', 'error'); return;
     }
-    state.map.setView([lat, lng], state.map.getZoom() < 5 ? 7 : state.map.getZoom());
+    // Derive zoom from the radius slider so the map shows the requested span
+    const radiusVal = parseFloat(document.getElementById('view-radius').value);
+    const spanDeg   = radiusVal * 0.8; // slider 1→0.8°, 2.5→2°, 5→4°, 10→8°
+    const targetZ   = Math.max(4, Math.min(14, Math.round(Math.log2(360 / spanDeg))));
+    state.map.setView([lat, lng], targetZ);
     setLocation(lat, lng);
   });
   document.getElementById('use-map-view').addEventListener('click', () => {
@@ -1191,19 +1218,23 @@ function setupEventListeners() {
     document.getElementById('lng-input').value = state.center[1];
     drawBboxOnMap();
     updateAoiInfo();
-    showToast('Current map view set as area of interest.', 'success');
+    showToast('Current map view pinned as area of interest.', 'success');
   });
   document.getElementById('view-radius').addEventListener('input', e => {
+    // Update the km display; zoom is applied the next time "Go to Location" is clicked
     const kmApprox = Math.round(parseFloat(e.target.value) * 89);
-    document.getElementById('area-km-display').textContent = `~${kmApprox} km`;
-    if (state.center[0] !== 0 || state.center[1] !== 0) computeBboxFromCenter();
+    document.getElementById('area-km-display').textContent = `~${kmApprox} km span`;
   });
   document.getElementById('clear-aoi-btn').addEventListener('click', clearAoi);
 
-  // Draw rectangle
+  // Draw rectangle / square
   document.getElementById('draw-rect-btn').addEventListener('click', () => {
-    if (state.drawingMode) stopDrawMode();
-    else startDrawMode();
+    if (state.drawingMode && state.drawConstraint === 'rect') stopDrawMode();
+    else { if (state.drawingMode) stopDrawMode(); startDrawMode('rect'); }
+  });
+  document.getElementById('draw-square-btn').addEventListener('click', () => {
+    if (state.drawingMode && state.drawConstraint === 'square') stopDrawMode();
+    else { if (state.drawingMode) stopDrawMode(); startDrawMode('square'); }
   });
 
   // Basemap

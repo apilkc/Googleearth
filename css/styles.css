@@ -716,6 +716,16 @@ input[type="range"]::-webkit-slider-thumb {
   gap: 6px;
 }
 
+.draw-btns {
+  display: flex;
+  gap: 2px;
+}
+.draw-btns .btn {
+  border-radius: 0;
+}
+.draw-btns .btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.draw-btns .btn:last-child  { border-radius: 0 var(--radius) var(--radius) 0; }
+
 .map-controls select {
   width: auto;
   font-size: 11px;

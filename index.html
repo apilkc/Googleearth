@@ -197,18 +197,19 @@
           <span id="draw-hint">— Click &amp; drag to draw area</span>
         </h3>
         <div class="map-controls">
-          <button id="draw-rect-btn" class="btn btn-sm btn-outline" title="Draw a bounding box on the map">
-            ▭ Draw Area
-          </button>
+          <div class="draw-btns">
+            <button id="draw-rect-btn"   class="btn btn-sm btn-outline" title="Draw a rectangle on the map">▭ Rect</button>
+            <button id="draw-square-btn" class="btn btn-sm btn-outline" title="Draw a square on the map">□ Square</button>
+          </div>
           <select id="basemap-select" title="Change map background">
-            <optgroup label="🛰 NASA (Free)">
-              <option value="gibs" selected>NASA MODIS Terra</option>
-              <option value="viirs">NASA VIIRS NOAA-20</option>
-            </optgroup>
             <optgroup label="🌍 Commercial Satellite">
-              <option value="google">Google Satellite</option>
+              <option value="google" selected>Google Satellite</option>
               <option value="esri">ESRI World Imagery</option>
               <option value="sentinel2">Sentinel-2 Cloudless (ESA)</option>
+            </optgroup>
+            <optgroup label="🛰 NASA (Free)">
+              <option value="gibs">NASA MODIS Terra</option>
+              <option value="viirs">NASA VIIRS NOAA-20</option>
             </optgroup>
             <optgroup label="🗺 Reference Maps">
               <option value="osm">OpenStreetMap</option>
