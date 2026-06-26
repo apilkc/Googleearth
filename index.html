@@ -3,53 +3,34 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EarthWatch — Satellite Disaster Monitoring</title>
-  <meta name="description" content="Track pre-disaster, disaster, and recovery phases using free NASA satellite imagery across multiple timelines.">
-
-  <!-- Leaflet CSS -->
+  <title>EarthWatch — Satellite Imagery Timeline</title>
+  <meta name="description" content="Compare historical satellite imagery across time using the ESRI Wayback high-resolution archive.">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-
-  <!-- App CSS -->
   <link rel="stylesheet" href="css/styles.css">
-
-  <style>
-    /* Critical inline styles to prevent flash of unstyled content */
-    body { background: #0d1117; color: #e6edf3; }
-  </style>
+  <style>body { background: #0d1117; color: #e6edf3; }</style>
 </head>
 <body>
 
-<!-- ==============================
-     HEADER
-     ============================== -->
+<!-- HEADER -->
 <header class="app-header">
   <div class="header-left">
     <button id="sidebar-toggle" class="btn btn-outline btn-sm sidebar-toggle-btn" title="Toggle sidebar">☰</button>
     <div class="header-logo">🛰️</div>
     <div class="header-title">
       <h1>EarthWatch</h1>
-      <span class="header-subtitle">Satellite Disaster Monitoring &amp; Recovery Tracker</span>
+      <span class="header-subtitle">Historical Satellite Imagery Timeline</span>
     </div>
   </div>
-
   <div class="header-right">
-    <span class="preset-label">Quick setup:</span>
-    <button class="preset-btn" data-preset="flood"      title="Flood monitoring setup">💧 Flood</button>
-    <button class="preset-btn" data-preset="wildfire"   title="Wildfire monitoring setup">🔥 Wildfire</button>
-    <button class="preset-btn" data-preset="earthquake" title="Earthquake monitoring setup">⛰ Earthquake</button>
-    <button class="preset-btn" data-preset="hurricane"  title="Hurricane/Typhoon setup">🌀 Hurricane</button>
+    <span class="archive-badge">ESRI Wayback Archive · 2014 → Present · ~0.5m resolution</span>
   </div>
 </header>
 
-<!-- ==============================
-     MAIN LAYOUT
-     ============================== -->
-<!-- Backdrop for mobile sidebar -->
 <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
 
 <div class="app-layout">
 
-  <!-- LEFT SIDEBAR -->
+  <!-- SIDEBAR -->
   <aside class="sidebar" id="sidebar">
 
     <!-- LOCATION -->
@@ -57,32 +38,25 @@
       <div class="section-title">📍 Location</div>
 
       <div class="input-group">
-        <input type="text" id="location-search" placeholder="Search city, country, region…" autocomplete="off">
-        <button id="search-btn" class="btn btn-outline btn-sm" title="Search">🔍</button>
+        <input type="text" id="location-search" placeholder="Search city, region…" autocomplete="off">
+        <button id="search-btn" class="btn btn-outline btn-sm">🔍</button>
       </div>
 
       <div class="coord-row">
         <div class="coord-input">
           <label>Latitude</label>
-          <input type="number" id="lat-input" placeholder="e.g. 13.756" min="-90" max="90" step="0.001">
+          <input type="number" id="lat-input" placeholder="27.7041" min="-90" max="90" step="0.001">
         </div>
         <div class="coord-input">
           <label>Longitude</label>
-          <input type="number" id="lng-input" placeholder="e.g. 100.502" min="-180" max="180" step="0.001">
+          <input type="number" id="lng-input" placeholder="85.3141" min="-180" max="180" step="0.001">
         </div>
       </div>
 
-      <div class="zoom-row">
-        <label>
-          View area radius
-          <span id="area-km-display">~222 km span</span>
-        </label>
-        <input type="range" id="view-radius" min="1" max="10" value="2.5" step="0.5">
-      </div>
-
       <div class="button-row">
-        <button id="go-to-location" class="btn btn-primary btn-sm">📍 Go to Location</button>
-        <button id="use-map-view"   class="btn btn-outline btn-sm" title="Use the current map viewport as the area of interest">⛶ Use Map View</button>
+        <button id="go-to-location" class="btn btn-primary btn-sm">📍 Go</button>
+        <button id="use-map-view" class="btn btn-outline btn-sm" title="Capture the current map view">⛶ Use View</button>
+        <button id="draw-rect-btn" class="btn btn-outline btn-sm" title="Draw a rectangle on the map">▭ Draw</button>
       </div>
 
       <div class="aoi-info" id="aoi-info" style="display:none">
@@ -92,186 +66,122 @@
       </div>
     </div>
 
-    <!-- SATELLITE SOURCE -->
-    <div class="sidebar-section">
-      <div class="section-title">🛰️ Satellite Source</div>
-      <div class="satellite-grid" id="satellite-grid">
-        <!-- Populated by satellites.js + app.js -->
-      </div>
-      <div id="sat-info-text" style="margin-top:6px;font-size:10px;color:var(--text3)"></div>
-    </div>
-
-    <!-- IMAGERY LAYER -->
-    <div class="sidebar-section">
-      <div class="section-title">🎨 Imagery Layer</div>
-      <div class="layer-grid" id="layer-grid">
-        <!-- Populated by app.js -->
-      </div>
-      <div class="layer-description" id="layer-description">
-        Select a layer above to see details.
-      </div>
-    </div>
-
     <!-- TIMELINE -->
     <div class="sidebar-section">
       <div class="section-title">
         📅 Timeline
         <span class="slot-count" id="slot-count">0 dates</span>
       </div>
-
-      <div class="timeline-slots" id="timeline-slots">
-        <!-- Populated dynamically -->
-      </div>
-
+      <div class="timeline-slots" id="timeline-slots"></div>
       <div class="timeline-actions">
         <button id="add-slot-btn" class="btn btn-outline">＋ Add Date</button>
-        <button id="clear-all-slots-btn" class="btn btn-outline">🗑 Clear All</button>
+        <button id="clear-all-slots-btn" class="btn btn-outline">🗑 Clear</button>
       </div>
     </div>
 
-    <!-- DISPLAY OPTIONS -->
+    <!-- IMAGE SETTINGS -->
     <div class="sidebar-section">
-      <div class="section-title">⚙️ Display Options</div>
+      <div class="section-title">⚙️ Image Settings</div>
 
       <div class="option-row">
-        <label>Grid columns</label>
-        <div class="grid-col-buttons">
-          <button class="grid-col-btn" data-cols="2">2</button>
-          <button class="grid-col-btn active" data-cols="3">3</button>
-          <button class="grid-col-btn" data-cols="4">4</button>
+        <label>Aspect ratio</label>
+        <div class="toggle-group" id="aspect-btns">
+          <button class="toggle-btn active" data-aspect="4:3">4:3</button>
+          <button class="toggle-btn" data-aspect="16:9">16:9</button>
+          <button class="toggle-btn" data-aspect="9:16">9:16</button>
         </div>
       </div>
 
       <div class="option-row">
-        <label>Image resolution</label>
-        <select id="image-size-select">
-          <option value="512" selected>512px (Fast)</option>
-          <option value="768">768px (Standard)</option>
-          <option value="1024">1024px (High Quality)</option>
+        <label>Display quality</label>
+        <select id="quality-select">
+          <option value="preview">Preview · 256px</option>
+          <option value="standard" selected>Standard · 512px</option>
+          <option value="high">High · 1024px</option>
+          <option value="ultra">Ultra · 2048px</option>
+        </select>
+      </div>
+
+      <div class="option-row">
+        <label>Grid columns</label>
+        <div class="toggle-group" id="grid-col-btns">
+          <button class="toggle-btn" data-cols="2">2</button>
+          <button class="toggle-btn active" data-cols="3">3</button>
+          <button class="toggle-btn" data-cols="4">4</button>
+        </div>
+      </div>
+
+      <div class="option-row">
+        <label>Map background</label>
+        <select id="basemap-select">
+          <option value="google" selected>Google Satellite</option>
+          <option value="esri">ESRI World Imagery</option>
+          <option value="osm">OpenStreetMap</option>
+          <option value="carto">Dark (CartoDB)</option>
         </select>
       </div>
     </div>
 
     <!-- ACTIONS -->
-    <div class="sidebar-section">
+    <div class="sidebar-section" style="border-bottom:none">
       <button id="load-images-btn" class="btn btn-primary btn-large">
-        🖼 Load Satellite Images
+        🖼 Load Timeline Images
       </button>
       <div class="action-buttons">
-        <button id="compare-btn"   class="btn btn-outline" disabled>⟺ Compare</button>
+        <button id="compare-btn"    class="btn btn-outline" disabled>⟺ Compare</button>
         <button id="export-all-btn" class="btn btn-outline" disabled>⬇ Export All</button>
       </div>
     </div>
 
-    <!-- ABOUT / TIPS -->
-    <div class="sidebar-section" style="border-bottom:none">
-      <div class="section-title" style="margin-bottom:6px">ℹ️ Tips</div>
-      <div style="font-size:10px;color:var(--text3);line-height:1.6">
-        <p>• Imagery from <strong style="color:var(--text2)">NASA GIBS</strong> — free, no login needed.</p>
-        <p>• Click the map or enter coordinates to set your location.</p>
-        <p>• Use disaster presets to auto-configure satellite &amp; timeline.</p>
-        <p>• Overlay layers (fire, flood) composite on top of true color.</p>
-        <p>• GOES-East/West only covers Americas &amp; Pacific regions.</p>
-        <p>• Night lights (DNB) can reveal power outages post-disaster.</p>
-      </div>
-    </div>
+  </aside>
 
-  </aside><!-- /sidebar -->
-
-  <!-- MAIN CONTENT -->
+  <!-- MAIN -->
   <main class="main-content">
 
-    <!-- Mobile hint bar -->
     <div class="mobile-hint" id="mobile-hint" onclick="openSidebar()">
-      <span>⚙️</span>
-      <span><strong>Tap here</strong> to configure satellite, layer &amp; timeline</span>
-      <span>→</span>
+      <span>⚙️</span><span><strong>Tap</strong> to configure</span><span>→</span>
     </div>
 
-    <!-- MAP PANEL -->
+    <!-- MAP -->
     <div class="map-panel">
       <div class="panel-header">
         <h3>
           🗺 Location Map
-          <span class="panel-hint">Click to set location · Draw a rectangle for precise area</span>
-          <span id="draw-hint">— Click &amp; drag to draw area</span>
+          <span class="panel-hint">Click to set location · zoom to the detail level you want</span>
+          <span id="draw-hint" style="display:none">— drag to draw area</span>
         </h3>
         <div class="map-controls">
-          <div class="draw-btns">
-            <button id="draw-rect-btn"   class="btn btn-sm btn-outline" title="Draw a rectangle on the map">▭ Rect</button>
-            <button id="draw-square-btn" class="btn btn-sm btn-outline" title="Draw a square on the map">□ Square</button>
-          </div>
-          <select id="basemap-select" title="Change map background">
-            <optgroup label="🌍 Commercial Satellite">
-              <option value="google" selected>Google Satellite</option>
-              <option value="esri">ESRI World Imagery</option>
-              <option value="sentinel2">Sentinel-2 Cloudless (ESA)</option>
-            </optgroup>
-            <optgroup label="🛰 NASA (Free)">
-              <option value="gibs">NASA MODIS Terra</option>
-              <option value="viirs">NASA VIIRS NOAA-20</option>
-            </optgroup>
-            <optgroup label="🗺 Reference Maps">
-              <option value="osm">OpenStreetMap</option>
-              <option value="carto">Dark (CartoDB)</option>
-            </optgroup>
-          </select>
+          <span id="map-zoom-info" class="zoom-badge">Zoom: 17</span>
         </div>
       </div>
-
       <div id="location-map" style="height:300px;width:100%"></div>
-
       <div class="map-status-bar">
         <span id="map-coords">Click on the map to set a location</span>
-        <span id="map-zoom-info">Zoom: 3</span>
+        <span style="color:var(--accent);font-size:10px">~0.5m · 194 dated releases</span>
       </div>
-    </div><!-- /map-panel -->
+    </div>
 
-    <!-- IMAGES PANEL -->
+    <!-- IMAGES -->
     <div class="images-panel" id="images-panel">
       <div class="panel-header">
-        <h3>
-          🖼 Satellite Timeline
-          <span class="image-count" id="image-count"></span>
-        </h3>
+        <h3>🖼 Satellite Timeline <span class="image-count" id="image-count"></span></h3>
       </div>
 
-      <!-- Live-only warning banner -->
-      <div class="live-only-banner" id="live-only-banner" style="display:none">
-        <span>⚡</span>
-        <span>
-          <strong>Live imagery only</strong> — this satellite has no date archive.
-          All cards show the same current image regardless of the dates you set.
-          Switch to <strong>MODIS Terra</strong> or <strong>VIIRS NOAA-20</strong> for historical date comparisons.
-        </span>
-      </div>
-
-      <!-- Empty state -->
       <div class="empty-state" id="empty-state">
         <div class="empty-state-icon">🛰️</div>
         <h3>No Images Loaded Yet</h3>
-        <p>
-          Configure the satellite, layer, and timeline on the left panel.
-          Select a location on the map, then click
-          <strong>Load Satellite Images</strong> to begin.
-        </p>
-        <p style="font-size:11px;margin-top:8px">
-          Try a <strong>Quick Setup</strong> preset at the top for instant configuration.
-        </p>
+        <p>Pan the map to your area of interest, add dates to the timeline, then click <strong>Load Timeline Images</strong>.</p>
+        <p style="font-size:11px;margin-top:6px;color:var(--text3)">Default: Dharahara Tower, Kathmandu — showing reconstruction after the 2015 earthquake.</p>
       </div>
 
-      <!-- Image grid -->
       <div class="images-grid" id="images-grid" style="display:none"></div>
+    </div>
 
-    </div><!-- /images-panel -->
-
-  </main><!-- /main-content -->
-</div><!-- /app-layout -->
+  </main>
+</div>
 
 
-<!-- ==============================
-     COMPARISON MODAL
-     ============================== -->
+<!-- COMPARISON MODAL -->
 <div class="modal-overlay" id="comparison-modal" style="display:none">
   <div class="modal" style="height:85vh">
     <div class="modal-header">
@@ -279,51 +189,35 @@
       <button class="modal-close-btn" id="close-comparison">✕</button>
     </div>
     <div class="modal-body">
-
       <div class="comparison-setup">
         <div class="compare-selector">
           <label>Before:</label>
           <select id="compare-before"><option value="">-- Select --</option></select>
         </div>
-
         <div class="compare-mode-toggle">
           <button class="mode-btn active" data-mode="slider">↔ Slider</button>
           <button class="mode-btn" data-mode="sidebyside">⬜⬜ Side by Side</button>
         </div>
-
         <div class="compare-selector">
           <label>After:</label>
           <select id="compare-after"><option value="">-- Select --</option></select>
         </div>
       </div>
 
-      <!-- SLIDER VIEW -->
       <div class="comparison-slider-view" id="comparison-slider-view" style="flex:1;position:relative;overflow:hidden;border-radius:6px;border:1px solid var(--border)">
         <div class="compare-images-container" style="position:relative;width:100%;height:100%">
-          <!-- After image — full size, bottom layer -->
-          <img id="cmp-after-img" src="" alt="After"
-               style="display:block;position:absolute;inset:0;width:100%;height:100%;object-fit:cover">
-
-          <!-- Before image — full size, clipped on the right via clip-path -->
-          <img id="cmp-before-img" src="" alt="Before"
-               style="display:block;position:absolute;inset:0;width:100%;height:100%;object-fit:cover;clip-path:inset(0 50% 0 0)">
-
-          <!-- White divider line + drag handle -->
+          <img id="cmp-after-img"  src="" alt="After"  style="display:block;position:absolute;inset:0;width:100%;height:100%;object-fit:cover">
+          <img id="cmp-before-img" src="" alt="Before" style="display:block;position:absolute;inset:0;width:100%;height:100%;object-fit:cover;clip-path:inset(0 50% 0 0)">
           <div id="cmp-divider" style="position:absolute;top:0;bottom:0;left:50%;width:2px;background:white;transform:translateX(-50%);pointer-events:none;box-shadow:0 0 8px rgba(0,0,0,0.5)">
             <div class="divider-handle" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">↔</div>
           </div>
-
-          <!-- Labels -->
           <div id="cmp-before-label" class="cmp-label left">BEFORE</div>
           <div id="cmp-after-label"  class="cmp-label right">AFTER</div>
-
-          <!-- Invisible range input covering the whole area -->
           <input type="range" id="cmp-slider" min="0" max="100" value="50"
                  style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:ew-resize;z-index:10;margin:0">
         </div>
       </div>
 
-      <!-- SIDE BY SIDE VIEW -->
       <div class="side-by-side-view" id="side-by-side-view" style="display:none;flex:1">
         <div class="sbs-panel">
           <div class="sbs-label" id="sbs-before-label">Before</div>
@@ -334,16 +228,13 @@
           <img id="sbs-after-img" src="" alt="After" style="flex:1;object-fit:cover">
         </div>
       </div>
-
     </div>
   </div>
 </div>
 
 
-<!-- ==============================
-     EXPAND / FULLSCREEN MODAL
-     ============================== -->
-<div id="expand-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:3000;flex-direction:column;align-items:center;justify-content:center;cursor:pointer">
+<!-- EXPAND MODAL -->
+<div id="expand-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.96);z-index:3000;flex-direction:column;align-items:center;justify-content:center;cursor:pointer">
   <div class="expand-header">
     <span id="expand-title" style="font-size:13px;color:#e6edf3"></span>
     <button id="expand-close" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:22px;padding:4px">✕</button>
@@ -352,30 +243,17 @@
 </div>
 
 
-<!-- ==============================
-     LOADING OVERLAY
-     ============================== -->
+<!-- LOADING -->
 <div class="loading-overlay" id="loading-overlay" style="display:none">
   <div class="loading-content">
     <div class="loading-spinner"></div>
-    <div class="loading-text" id="loading-text">Preparing satellite imagery…</div>
+    <div class="loading-text" id="loading-text">Fetching imagery archive…</div>
   </div>
 </div>
 
-
-<!-- ==============================
-     TOAST NOTIFICATIONS
-     ============================== -->
 <div id="toast-container"></div>
 
-
-<!-- ==============================
-     SCRIPTS
-     ============================== -->
-<!-- Leaflet JS -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-<!-- App scripts -->
 <script src="js/satellites.js"></script>
 <script src="js/app.js"></script>
 
