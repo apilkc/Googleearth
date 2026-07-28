@@ -9,10 +9,8 @@ const state = {
   bbox: null,                    // [west, south, east, north] — null = use map viewport
   locationMarker: null,
   bboxRect: null,
-  drawingMode: false,
-  drawStart: null,
-  drawTempRect: null,
   viewportRect: null,
+  viewportLockMode: false,       // false = auto-reload on pan/zoom, true = lock to initial viewport
 
   satellite: 'esri_wayback',
   layer: 'world_imagery',
@@ -51,7 +49,6 @@ function initMap() {
   state.map.on('click', onMapClick);
   state.map.on('zoomend', onZoomEnd);
   state.map.on('moveend', onMoveEnd);
-  state.map.on('mousemove', onMouseMove);
 
   setTimeout(() => { state.map.invalidateSize(); updateViewportOutline(); }, 100);
   window.addEventListener('resize', () => state.map.invalidateSize());
@@ -63,11 +60,6 @@ const BASEMAPS = {
     attribution: '© <a href="https://maps.google.com">Google</a>',
     maxZoom: 21,
     subdomains: ['0', '1', '2', '3'],
-  },
-  esri: {
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: '© <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics',
-    maxZoom: 19,
   },
   osm: {
     url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -101,6 +93,9 @@ function onMapClick(e) {
 function onZoomEnd() {
   document.getElementById('map-zoom-info').textContent = `Zoom: ${state.map.getZoom()}`;
   updateViewportOutline();
+  if (state.loadedSlots.length > 0 && !state.viewportLockMode && !state.bbox) {
+    loadImages();
+  }
 }
 
 function onMoveEnd() {
@@ -108,6 +103,9 @@ function onMoveEnd() {
   document.getElementById('map-coords').textContent =
     `Center: ${c.lat.toFixed(4)}°, ${c.lng.toFixed(4)}°`;
   updateViewportOutline();
+  if (state.loadedSlots.length > 0 && !state.viewportLockMode && !state.bbox) {
+    loadImages();
+  }
 }
 
 function updateViewportOutline() {
@@ -123,10 +121,6 @@ function updateViewportOutline() {
       color: '#4493f8', weight: 2, fillOpacity: 0.04, dashArray: '6 4', interactive: false,
     }).addTo(state.map);
   }
-}
-
-function onMouseMove(e) {
-  if (state.drawingMode && state.drawStart) updateDrawRect(e.latlng);
 }
 
 function setLocation(lat, lng) {
@@ -164,69 +158,6 @@ function clearAoi() {
   document.getElementById('lat-input').value = '';
   document.getElementById('lng-input').value = '';
   updateViewportOutline();
-}
-
-// ── Draw Rectangle ─────────────────────────────────────────────────────────────
-function startDrawMode() {
-  state.drawingMode = true;
-  state.map.getContainer().style.cursor = 'crosshair';
-  document.getElementById('draw-rect-btn').classList.add('active');
-  document.getElementById('draw-hint').style.display = 'inline';
-  state.map.on('mousedown', onDrawStart);
-  state.map.on('mouseup', onDrawEnd);
-  state.map.dragging.disable();
-}
-
-function stopDrawMode() {
-  state.drawingMode = false;
-  state.drawStart = null;
-  state.map.getContainer().style.cursor = '';
-  document.getElementById('draw-rect-btn').classList.remove('active');
-  document.getElementById('draw-hint').style.display = 'none';
-  state.map.off('mousedown', onDrawStart);
-  state.map.off('mouseup', onDrawEnd);
-  if (state.drawTempRect) { state.map.removeLayer(state.drawTempRect); state.drawTempRect = null; }
-  state.map.dragging.enable();
-}
-
-function onDrawStart(e) {
-  state.drawStart = e.latlng;
-  if (state.drawTempRect) state.map.removeLayer(state.drawTempRect);
-  state.drawTempRect = L.rectangle(
-    [[e.latlng.lat, e.latlng.lng], [e.latlng.lat, e.latlng.lng]],
-    { color: '#4a9eff', weight: 2, fillOpacity: 0.1, dashArray: '4,4' },
-  ).addTo(state.map);
-}
-
-function updateDrawRect(latlng) {
-  if (!state.drawTempRect || !state.drawStart) return;
-  state.drawTempRect.setBounds([
-    [state.drawStart.lat, state.drawStart.lng],
-    [latlng.lat, latlng.lng],
-  ]);
-}
-
-function onDrawEnd(e) {
-  if (!state.drawStart) return;
-  const s = state.drawStart, end = e.latlng;
-  const west  = Math.min(s.lng, end.lng), east  = Math.max(s.lng, end.lng);
-  const south = Math.min(s.lat, end.lat), north = Math.max(s.lat, end.lat);
-
-  if (Math.abs(east - west) < 0.005 || Math.abs(north - south) < 0.005) {
-    stopDrawMode();
-    return;
-  }
-
-  state.bbox = [+west.toFixed(6), +south.toFixed(6), +east.toFixed(6), +north.toFixed(6)];
-  state.center = [
-    +(south + (north - south) / 2).toFixed(5),
-    +(west  + (east  - west)  / 2).toFixed(5),
-  ];
-  document.getElementById('lat-input').value = state.center[0];
-  document.getElementById('lng-input').value = state.center[1];
-  drawBboxOnMap();
-  updateAoiInfo();
-  stopDrawMode();
 }
 
 // ── Timeline Slots ─────────────────────────────────────────────────────────────
@@ -487,7 +418,11 @@ async function _stitchWayback(bbox, dateStr, maxDim = null) {
   if (!release) return null;
 
   const mapZ = state.map ? state.map.getZoom() : 17;
-  const zoom  = _bboxZoom(bbox, Math.min(21, Math.max(mapZ, 10)));
+  // ESRI Wayback supports zoom up to 21; match the basemap's max zoom capability
+  const maxBasemapZoom = state.basemapLayer?.options?.maxZoom || 21;
+  const MAX_IMAGERY_ZOOM = 21;
+  const maxAvailZoom = Math.min(maxBasemapZoom, MAX_IMAGERY_ZOOM);
+  const zoom  = _bboxZoom(bbox, Math.min(maxAvailZoom, Math.max(mapZ, 10)));
   const tileUrl = (x, y, z) =>
     `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS` +
     `/1.0.0/default028mm/MapServer/tile/${release.num}/${z}/${y}/${x}`;
@@ -822,6 +757,7 @@ function setGridCols(cols) {
 function enableActionButtons() {
   document.getElementById('compare-btn').disabled    = false;
   document.getElementById('export-all-btn').disabled = false;
+  document.getElementById('reload-images-btn').style.display = state.viewportLockMode ? 'block' : 'none';
 }
 
 // ── Loading Overlay ────────────────────────────────────────────────────────────
@@ -905,10 +841,20 @@ function setupEventListeners() {
 
   document.getElementById('clear-aoi-btn').addEventListener('click', clearAoi);
 
-  // Draw rectangle toggle
-  document.getElementById('draw-rect-btn').addEventListener('click', () => {
-    if (state.drawingMode) stopDrawMode();
-    else startDrawMode();
+  // Viewport lock toggle
+  document.querySelectorAll('#viewport-lock-btns .toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode === 'true';
+      state.viewportLockMode = mode;
+      document.querySelectorAll('#viewport-lock-btns .toggle-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('reload-images-btn').style.display = mode && state.loadedSlots.length > 0 ? 'block' : 'none';
+    });
+  });
+
+  // Manual reload images
+  document.getElementById('reload-images-btn').addEventListener('click', () => {
+    if (state.loadedSlots.length > 0) loadImages();
   });
 
   // Basemap
