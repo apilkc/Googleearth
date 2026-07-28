@@ -508,7 +508,6 @@ input[type="range"]::-webkit-slider-thumb {
 /* ── MAP PANEL ──────────────────────────────────────────────────────────────────── */
 .map-panel {
   flex-shrink: 0;
-  height: 370px;
   display: flex;
   flex-direction: column;
   border-bottom: 1px solid var(--border);
@@ -554,7 +553,7 @@ input[type="range"]::-webkit-slider-thumb {
   font-family: monospace;
 }
 
-#location-map { flex: 1; }
+#location-map { max-height: 60vh; }
 
 .map-status-bar {
   display: flex;
@@ -1180,7 +1179,7 @@ input[type="range"]::-webkit-slider-thumb {
   }
 
   .map-panel { height: auto; flex-shrink: 0; }
-  #location-map { height: 260px !important; }
+  #location-map { max-height: 45vh; }
   .images-panel { min-height: 50vh; }
 
   .header-subtitle  { display: none; }

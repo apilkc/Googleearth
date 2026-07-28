@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EarthWatch — Satellite Imagery Timeline</title>
-  <meta name="description" content="Compare historical satellite imagery across time using the ESRI Wayback high-resolution archive.">
+  <meta name="description" content="Compare historical satellite imagery across time using a high-resolution archive.">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <link rel="stylesheet" href="css/styles.css">
   <style>body { background: #0d1117; color: #e6edf3; }</style>
@@ -22,7 +22,7 @@
     </div>
   </div>
   <div class="header-right">
-    <span class="archive-badge">ESRI Wayback Archive · 2014 → Present · ~0.5m resolution</span>
+    <span class="archive-badge">Historical Satellite Archive · 2014 → Present · ~0.5m resolution</span>
   </div>
 </header>
 
@@ -163,7 +163,7 @@
           <span id="map-zoom-info" class="zoom-badge">Zoom: 17</span>
         </div>
       </div>
-      <div id="location-map" style="height:300px;width:100%"></div>
+      <div id="location-map" style="width:100%;aspect-ratio:4/3"></div>
       <div class="map-status-bar">
         <span id="map-coords">Click on the map to set a location</span>
         <span style="color:var(--accent);font-size:10px">~0.5m · 194 dated releases</span>
