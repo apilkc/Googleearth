@@ -568,13 +568,6 @@ input[type="range"]::-webkit-slider-thumb {
   flex-shrink: 0;
 }
 
-#draw-hint {
-  display: none;
-  font-size: 10px;
-  color: var(--warning);
-  margin-left: 6px;
-}
-
 /* ── IMAGES PANEL ──────────────────────────────────────────────────────────────── */
 .images-panel {
   flex: 1;
@@ -919,7 +912,7 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 #cmp-after-img  { display: block; width: 100%; height: 100%; object-fit: cover; }
-#cmp-before-img { display: block; width: 100%; height: 100%; object-fit: cover; min-width: 200%; }
+#cmp-before-img { display: block; width: 100%; height: 100%; object-fit: cover; }
 
 #cmp-divider {
   position: absolute;
