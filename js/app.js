@@ -71,7 +71,8 @@ const BASEMAPS = {
   google: {
     url: 'https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
     attribution: '© <a href="https://maps.google.com">Google</a>',
-    maxZoom: 21,
+    maxZoom: 23,
+    maxNativeZoom: 21,
     subdomains: ['0', '1', '2', '3'],
   },
   osm: {
@@ -90,7 +91,8 @@ function applyBasemap(id) {
   if (state.basemapLayer) state.map.removeLayer(state.basemapLayer);
   const cfg = BASEMAPS[id] || BASEMAPS.google;
   const opts = { attribution: cfg.attribution, maxZoom: cfg.maxZoom };
-  if (cfg.subdomains) opts.subdomains = cfg.subdomains;
+  if (cfg.subdomains)    opts.subdomains    = cfg.subdomains;
+  if (cfg.maxNativeZoom) opts.maxNativeZoom = cfg.maxNativeZoom;
   state.basemapLayer = L.tileLayer(cfg.url, opts);
   state.basemapLayer.addTo(state.map);
   state.basemap = id;
@@ -433,9 +435,13 @@ async function _stitchWayback(bbox, dateStr, maxDim = null) {
   if (!release) return null;
 
   const mapZ = state.map ? state.map.getZoom() : 17;
-  // ESRI Wayback supports zoom up to 21; match the basemap's max zoom capability
-  const maxBasemapZoom = state.basemapLayer?.options?.maxZoom || 21;
-  const MAX_IMAGERY_ZOOM = 21;
+  // Wayback's WMTS tile matrix nominally goes to level 23, but actual coverage
+  // at 22+ only exists for select high-density areas/dates. We attempt the
+  // fetch anyway and rely on the tile-gap detection below to flag it
+  // clearly when a location/date doesn't have imagery at that resolution,
+  // rather than pre-emptively capping everyone at a lower zoom.
+  const maxBasemapZoom = state.basemapLayer?.options?.maxZoom || 22;
+  const MAX_IMAGERY_ZOOM = 22;
   const maxAvailZoom = Math.min(maxBasemapZoom, MAX_IMAGERY_ZOOM);
   const zoom  = _bboxZoom(bbox, Math.min(maxAvailZoom, Math.max(mapZ, 10)));
   const tileUrl = (x, y, z) =>
