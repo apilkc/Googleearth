@@ -45,6 +45,7 @@ function initMap() {
   });
 
   applyBasemap('google');
+  applyMapAspectRatio();
 
   state.map.on('click', onMapClick);
   state.map.on('zoomend', onZoomEnd);
@@ -52,6 +53,18 @@ function initMap() {
 
   setTimeout(() => { state.map.invalidateSize(); updateViewportOutline(); }, 100);
   window.addEventListener('resize', () => state.map.invalidateSize());
+}
+
+// Keeps the map viewport's aspect ratio in sync with the image frame so the
+// area visible on the map matches what gets captured in the timeline images.
+function applyMapAspectRatio() {
+  const [arW, arH] = aspectRatioParts(state.aspectRatio);
+  document.getElementById('location-map').style.aspectRatio = `${arW} / ${arH}`;
+  requestAnimationFrame(() => {
+    if (!state.map) return;
+    state.map.invalidateSize();
+    updateViewportOutline();
+  });
 }
 
 const BASEMAPS = {
@@ -86,16 +99,13 @@ function applyBasemap(id) {
 }
 
 function onMapClick(e) {
-  if (state.drawingMode) return;
   setLocation(e.latlng.lat, e.latlng.lng);
 }
 
 function onZoomEnd() {
   document.getElementById('map-zoom-info').textContent = `Zoom: ${state.map.getZoom()}`;
   updateViewportOutline();
-  if (state.loadedSlots.length > 0 && !state.viewportLockMode && !state.bbox) {
-    loadImages();
-  }
+  if (!state.viewportLockMode && !state.bbox) reloadIfImagesLoaded();
 }
 
 function onMoveEnd() {
@@ -103,9 +113,7 @@ function onMoveEnd() {
   document.getElementById('map-coords').textContent =
     `Center: ${c.lat.toFixed(4)}°, ${c.lng.toFixed(4)}°`;
   updateViewportOutline();
-  if (state.loadedSlots.length > 0 && !state.viewportLockMode && !state.bbox) {
-    loadImages();
-  }
+  if (!state.viewportLockMode && !state.bbox) reloadIfImagesLoaded();
 }
 
 function updateViewportOutline() {
@@ -580,13 +588,13 @@ function buildImageCard(slot, idx) {
       </div>
     </div>
     <div class="card-footer">
-      <span class="card-archive-tag">ESRI Wayback</span>
+      <span class="card-archive-tag">Satellite Archive</span>
       <div class="card-dl-row">
         <select class="card-quality-select">
-          <option value="preview">256px</option>
-          <option value="standard" selected>512px</option>
-          <option value="high">1024px</option>
-          <option value="ultra">2048px</option>
+          <option value="preview" ${state.imageQuality === 'preview' ? 'selected' : ''}>256px</option>
+          <option value="standard" ${state.imageQuality === 'standard' ? 'selected' : ''}>512px</option>
+          <option value="high" ${state.imageQuality === 'high' ? 'selected' : ''}>1024px</option>
+          <option value="ultra" ${state.imageQuality === 'ultra' ? 'selected' : ''}>2048px</option>
         </select>
         <button class="card-dl-btn" title="Re-stitch at selected quality and download">⬇</button>
       </div>
@@ -614,7 +622,7 @@ function expandImage(idx) {
   if (!slot?.imageUrl) return;
   document.getElementById('expand-img').src = slot.imageUrl;
   document.getElementById('expand-title').textContent =
-    `${slot.label} — ${slot.usedDate || slot.date} — ESRI Wayback`;
+    `${slot.label} — ${slot.usedDate || slot.date}`;
   document.getElementById('expand-modal').style.display = 'flex';
 }
 
@@ -744,6 +752,11 @@ async function searchLocation(query) {
   }
 }
 
+// ── Live Settings Reload ──────────────────────────────────────────────────────
+function reloadIfImagesLoaded() {
+  if (state.loadedSlots.length > 0) loadImages();
+}
+
 // ── Grid Columns ───────────────────────────────────────────────────────────────
 function setGridCols(cols) {
   state.gridCols = cols;
@@ -853,9 +866,7 @@ function setupEventListeners() {
   });
 
   // Manual reload images
-  document.getElementById('reload-images-btn').addEventListener('click', () => {
-    if (state.loadedSlots.length > 0) loadImages();
-  });
+  document.getElementById('reload-images-btn').addEventListener('click', reloadIfImagesLoaded);
 
   // Basemap
   document.getElementById('basemap-select').addEventListener('change', e => applyBasemap(e.target.value));
@@ -866,12 +877,15 @@ function setupEventListeners() {
       state.aspectRatio = btn.dataset.aspect;
       document.querySelectorAll('#aspect-btns .toggle-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      applyMapAspectRatio();
+      reloadIfImagesLoaded();
     });
   });
 
   // Display quality
   document.getElementById('quality-select').addEventListener('change', e => {
     state.imageQuality = e.target.value;
+    reloadIfImagesLoaded();
   });
 
   // Grid columns
