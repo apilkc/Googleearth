@@ -56,7 +56,6 @@
       <div class="button-row">
         <button id="go-to-location" class="btn btn-primary btn-sm">📍 Go</button>
         <button id="use-map-view" class="btn btn-outline btn-sm" title="Capture the current map view">⛶ Use View</button>
-        <button id="draw-rect-btn" class="btn btn-outline btn-sm" title="Draw a rectangle on the map">▭ Draw</button>
       </div>
 
       <div class="aoi-info" id="aoi-info" style="display:none">
@@ -64,6 +63,18 @@
         <span id="aoi-coords-display">Area selected</span>
         <button id="clear-aoi-btn" class="btn-icon" title="Clear selection">✕</button>
       </div>
+
+      <div class="option-row">
+        <label>Image tracking</label>
+        <div class="toggle-group" id="viewport-lock-btns">
+          <button class="toggle-btn active" data-mode="false" title="Images update as you pan/zoom">🔄 Auto</button>
+          <button class="toggle-btn" data-mode="true" title="Images lock to initial view">🔒 Lock</button>
+        </div>
+      </div>
+
+      <button id="reload-images-btn" class="btn btn-outline" style="display:none;width:100%">
+        🔄 Reload Images
+      </button>
     </div>
 
     <!-- TIMELINE -->
@@ -115,7 +126,6 @@
         <label>Map background</label>
         <select id="basemap-select">
           <option value="google" selected>Google Satellite</option>
-          <option value="esri">ESRI World Imagery</option>
           <option value="osm">OpenStreetMap</option>
           <option value="carto">Dark (CartoDB)</option>
         </select>
@@ -148,7 +158,6 @@
         <h3>
           🗺 Location Map
           <span class="panel-hint">Click to set location · zoom to the detail level you want</span>
-          <span id="draw-hint" style="display:none">— drag to draw area</span>
         </h3>
         <div class="map-controls">
           <span id="map-zoom-info" class="zoom-badge">Zoom: 17</span>
