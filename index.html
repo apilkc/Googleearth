@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EarthWatch — Satellite Imagery Timeline</title>
-  <meta name="description" content="Compare historical satellite imagery across time using a high-resolution archive.">
+  <meta name="description" content="Trace post-disaster recovery over time by comparing historical satellite imagery across a timeline of dates.">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <link rel="stylesheet" href="css/styles.css">
   <style>body { background: #0d1117; color: #e6edf3; }</style>
@@ -18,11 +18,12 @@
     <div class="header-logo">🛰️</div>
     <div class="header-title">
       <h1>EarthWatch</h1>
-      <span class="header-subtitle">Historical Satellite Imagery Timeline</span>
+      <span class="header-subtitle">Post-Disaster Recovery Timeline</span>
     </div>
   </div>
   <div class="header-right">
     <span class="archive-badge">Historical Satellite Archive · 2014 → Present · ~0.5m resolution</span>
+    <button id="about-btn" class="btn btn-outline btn-sm" title="About this project">ℹ️ About</button>
   </div>
 </header>
 
@@ -189,6 +190,35 @@
   </main>
 </div>
 
+
+<!-- ABOUT MODAL -->
+<div class="modal-overlay" id="about-modal" style="display:none">
+  <div class="modal" style="height:auto;max-height:80vh">
+    <div class="modal-header">
+      <h3>🛰️ About EarthWatch</h3>
+      <button class="modal-close-btn" id="close-about">✕</button>
+    </div>
+    <div class="modal-body" style="overflow-y:auto;line-height:1.6;font-size:13px">
+      <p>
+        EarthWatch helps people trace <strong>post-disaster recovery</strong> over time.
+        Pick a location, add a few key dates — before the disaster, during rebuilding,
+        and today — and instantly compare how the ground has changed using high-resolution
+        historical satellite imagery.
+      </p>
+      <p style="margin-top:10px">
+        It's built for anyone who wants to observe recovery on their own: residents
+        checking on their neighborhood, journalists and researchers documenting
+        reconstruction, and local or aid organizations monitoring recovery progress
+        across a disaster-affected area — without needing specialized GIS tools.
+      </p>
+      <p style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);color:var(--text2)">
+        Created by <strong>Apil KC</strong>, who works in disaster response and recovery.<br>
+        <strong>Sagar Khanal</strong> is advancing this method of using satellite imagery
+        to trace recovery timelines.
+      </p>
+    </div>
+  </div>
+</div>
 
 <!-- COMPARISON MODAL -->
 <div class="modal-overlay" id="comparison-modal" style="display:none">
