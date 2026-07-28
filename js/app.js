@@ -303,7 +303,8 @@ function aspectRatioParts(ar) {
 
 // ── Tile Stitching ─────────────────────────────────────────────────────────────
 // Stitch tiles into a canvas, crop to exact bbox, center-crop to target aspect
-// ratio, then scale to maxDim. Returns canvas or null on CORS failure.
+// ratio, then scale to maxDim. Returns {canvas, failedTiles, totalTiles} or null
+// if every tile failed (no coverage at this zoom) or on CORS failure.
 async function _stitchToCanvas(bbox, tileUrlFn, zoom, { maxDim = 512, aspectRatio = '4:3' } = {}) {
   const [w, s, e, n] = bbox;
   const xMin = _lon2tile(w, zoom), xMax = _lon2tile(e, zoom);
@@ -315,6 +316,8 @@ async function _stitchToCanvas(bbox, tileUrlFn, zoom, { maxDim = 512, aspectRati
   const raw = document.createElement('canvas');
   raw.width = cols * T; raw.height = rows * T;
   const ctx = raw.getContext('2d');
+  const totalTiles = cols * rows;
+  let failedTiles = 0;
 
   try {
     await Promise.all(
@@ -324,12 +327,16 @@ async function _stitchToCanvas(bbox, tileUrlFn, zoom, { maxDim = 512, aspectRati
             const img = new Image();
             img.crossOrigin = 'anonymous';
             img.onload  = () => { ctx.drawImage(img, ci * T, ri * T, T, T); res(); };
-            img.onerror = () => res();
+            img.onerror = () => { failedTiles++; res(); };
             img.src = tileUrlFn(xMin + ci, yMin + ri, zoom);
           })
         )
       ).flat()
     );
+
+    // No tile at all loaded — no coverage exists at this zoom/date, don't
+    // return a canvas that would just render as a solid black image.
+    if (failedTiles === totalTiles) return null;
 
     // Crop to exact bbox
     const lonW = _tile2lon(xMin,     zoom), lonE = _tile2lon(xMax + 1, zoom);
@@ -370,7 +377,7 @@ async function _stitchToCanvas(bbox, tileUrlFn, zoom, { maxDim = 512, aspectRati
     const out = document.createElement('canvas');
     out.width = outW; out.height = outH;
     out.getContext('2d').drawImage(raw, px, py, pw, ph, 0, 0, outW, outH);
-    return out;
+    return { canvas: out, failedTiles, totalTiles };
   } catch {
     return null;
   }
@@ -420,7 +427,7 @@ async function _findWaybackRelease(dateStr) {
   return best;
 }
 
-// Returns {canvas, usedDate} | {directUrl, usedDate} | null
+// Returns {canvas, usedDate, failedTiles, totalTiles} | {directUrl, usedDate} | null
 async function _stitchWayback(bbox, dateStr, maxDim = null) {
   const release = await _findWaybackRelease(dateStr);
   if (!release) return null;
@@ -435,13 +442,13 @@ async function _stitchWayback(bbox, dateStr, maxDim = null) {
     `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS` +
     `/1.0.0/default028mm/MapServer/tile/${release.num}/${z}/${y}/${x}`;
 
-  const canvas = await _stitchToCanvas(bbox, tileUrl, zoom, {
+  const result = await _stitchToCanvas(bbox, tileUrl, zoom, {
     maxDim:      maxDim ?? qualityToMaxDim(state.imageQuality),
     aspectRatio: state.aspectRatio,
   });
 
   const usedDate = release.date.toISOString().slice(0, 10);
-  if (canvas) return { canvas, usedDate };
+  if (result) return { ...result, usedDate };
 
   // CORS fallback — serve center tile directly as <img> src
   const [ww, ss, ee, nn] = bbox;
@@ -451,7 +458,14 @@ async function _stitchWayback(bbox, dateStr, maxDim = null) {
 
 async function resolveImageUrl(slot, bbox) {
   const result = await _stitchWayback(bbox, slot.date);
-  if (result?.canvas)    return { url: result.canvas.toDataURL('image/jpeg', 0.88), usedDate: result.usedDate };
+  if (result?.canvas) {
+    return {
+      url: result.canvas.toDataURL('image/jpeg', 0.88),
+      usedDate: result.usedDate,
+      failedTiles: result.failedTiles,
+      totalTiles: result.totalTiles,
+    };
+  }
   if (result?.directUrl) return { url: result.directUrl, usedDate: result.usedDate };
   showToast('Wayback archive unavailable for this date.', 'warning', 6000);
   return { url: null, usedDate: null };
@@ -497,21 +511,23 @@ async function loadImages() {
 
   await Promise.all(
     state.loadedSlots.map(async (slot, i) => {
-      const { url, usedDate } = await resolveImageUrl(slot, activeBbox);
+      const { url, usedDate, failedTiles, totalTiles } = await resolveImageUrl(slot, activeBbox);
       slot.imageUrl = url || '';
       slot.usedDate = usedDate;
-      setCardImage(i, url, usedDate, slot.date);
+      slot.hasGaps  = !!(failedTiles && totalTiles);
+      setCardImage(i, url, usedDate, slot.date, slot.hasGaps);
     })
   );
 }
 
-function setCardImage(idx, url, usedDate, requestedDate) {
+function setCardImage(idx, url, usedDate, requestedDate, hasGaps) {
   const card = document.querySelector(`.image-card[data-index="${idx}"]`);
   if (!card) return;
-  const img     = card.querySelector('.card-image');
-  const loading = card.querySelector('.card-img-loading');
-  const noData  = card.querySelector('.card-no-data');
-  const dateEl  = card.querySelector('.card-date');
+  const img      = card.querySelector('.card-image');
+  const loading  = card.querySelector('.card-img-loading');
+  const noData   = card.querySelector('.card-no-data');
+  const dateEl   = card.querySelector('.card-date');
+  const gapBadge = card.querySelector('.card-gap-badge');
 
   if (usedDate && dateEl && usedDate !== requestedDate) {
     dateEl.textContent = usedDate;
@@ -524,6 +540,8 @@ function setCardImage(idx, url, usedDate, requestedDate) {
     noData.style.display  = 'flex';
     return;
   }
+
+  if (hasGaps && gapBadge) gapBadge.style.display = 'flex';
 
   if (url.startsWith('data:')) {
     img.src = url;
@@ -581,6 +599,9 @@ function buildImageCard(slot, idx) {
       <img class="card-image" src="" alt="${escHtml(slot.label)} ${slot.date}" style="display:none">
       <div class="card-no-data" style="display:none">
         <span>⚠️</span><span>No imagery available</span>
+      </div>
+      <div class="card-gap-badge" style="display:none" title="Some areas here are unavailable — no imagery exists at this zoom level / resolution for this date. Try zooming out or picking a nearby date.">
+        ⚠ Dark areas = no imagery at this zoom
       </div>
       <div class="card-actions">
         <button class="card-action-btn" data-action="expand" title="View fullscreen">⛶ Expand</button>
@@ -904,6 +925,16 @@ function setupEventListeners() {
   document.getElementById('load-images-btn').addEventListener('click', loadImages);
   document.getElementById('compare-btn').addEventListener('click', openComparisonModal);
   document.getElementById('export-all-btn').addEventListener('click', downloadAllImages);
+
+  // About modal
+  document.getElementById('about-btn').addEventListener('click', () =>
+    document.getElementById('about-modal').style.display = 'flex');
+  document.getElementById('close-about').addEventListener('click', () =>
+    document.getElementById('about-modal').style.display = 'none');
+  document.getElementById('about-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('about-modal'))
+      document.getElementById('about-modal').style.display = 'none';
+  });
 
   // Comparison modal
   document.getElementById('close-comparison').addEventListener('click', () =>
