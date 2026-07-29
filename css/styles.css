@@ -417,6 +417,11 @@ input[type="range"]::-webkit-slider-thumb {
   min-width: 130px;
 }
 
+.option-row input[type="number"] {
+  width: 70px;
+  flex-shrink: 0;
+}
+
 /* ── TIMELINE SLOTS ──────────────────────────────────────────────────────────── */
 .timeline-slots {
   display: flex;
@@ -527,6 +532,68 @@ input[type="range"]::-webkit-slider-thumb {
   gap: 6px;
 }
 .timeline-actions .btn { flex: 1; }
+
+/* ── BATCH SITES ─────────────────────────────────────────────────────────────── */
+.upload-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.upload-btn-label { flex: 1; text-align: center; cursor: pointer; }
+.sample-link {
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+  text-decoration: none;
+}
+.sample-link:hover { text-decoration: underline; }
+
+.site-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.site-list::-webkit-scrollbar { width: 4px; }
+.site-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.site-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 6px;
+  transition: border-color 0.15s;
+}
+.site-row:hover { border-color: var(--border2); }
+
+.site-row-icon { flex-shrink: 0; font-size: 13px; opacity: 0.8; }
+
+.site-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.site-label-input {
+  font-size: 11px;
+  padding: 3px 6px;
+  width: 100%;
+}
+
+.site-row-meta {
+  font-size: 9px;
+  color: var(--text3);
+  font-family: monospace;
+}
 
 /* ── MAIN CONTENT ──────────────────────────────────────────────────────────────── */
 .main-content {
@@ -648,6 +715,38 @@ input[type="range"]::-webkit-slider-thumb {
   gap: 12px;
   align-items: start;
 }
+
+/* ── BATCH RESULTS ──────────────────────────────────────────────────────────── */
+.batch-results {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.site-group {
+  border-bottom: 1px solid var(--border);
+}
+.site-group:last-child { border-bottom: none; }
+
+.site-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px 0;
+}
+
+.site-group-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.site-group-meta {
+  font-size: 10px;
+  color: var(--text3);
+  font-family: monospace;
+}
+
+.site-group .images-grid { padding-top: 10px; }
 
 /* ── IMAGE CARD ──────────────────────────────────────────────────────────────── */
 @keyframes cardEnter {

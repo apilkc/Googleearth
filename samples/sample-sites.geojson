@@ -1,0 +1,24 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "Example Point Site (edit or delete)" },
+      "geometry": { "type": "Point", "coordinates": [85.3141, 27.7041] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Example Polygon Site (edit or delete)" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [85.3120, 27.7060],
+          [85.3160, 27.7060],
+          [85.3160, 27.7025],
+          [85.3120, 27.7025],
+          [85.3120, 27.7060]
+        ]]
+      }
+    }
+  ]
+}

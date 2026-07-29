@@ -79,6 +79,38 @@
       </button>
     </div>
 
+    <!-- BATCH SITES -->
+    <div class="sidebar-section">
+      <div class="section-title">
+        🗂 Batch Sites
+        <span class="slot-count" id="site-count">0 sites</span>
+      </div>
+
+      <div class="option-row">
+        <label>Site radius (points)</label>
+        <input type="number" id="site-radius-input" value="300" min="50" max="5000" step="50">
+      </div>
+
+      <button id="add-current-as-site-btn" class="btn btn-outline" style="width:100%">
+        📍 Add Current Location as Site
+      </button>
+
+      <div class="upload-row">
+        <label for="site-upload-input" class="btn btn-outline btn-sm upload-btn-label">📤 Upload GeoJSON</label>
+        <input type="file" id="site-upload-input" accept=".geojson,application/geo+json,application/json" style="display:none">
+        <a href="samples/sample-sites.geojson" download class="sample-link">⬇ Sample</a>
+      </div>
+
+      <div class="site-list" id="site-list"></div>
+
+      <div class="button-row">
+        <button id="run-batch-btn" class="btn btn-primary" disabled>▶ Run Batch (<span id="batch-count-label">0</span>)</button>
+      </div>
+      <button id="export-batch-zip-btn" class="btn btn-outline" style="width:100%" disabled>
+        ⬇ Export All as ZIP
+      </button>
+    </div>
+
     <!-- TIMELINE -->
     <div class="sidebar-section">
       <div class="section-title">
@@ -186,6 +218,7 @@
       </div>
 
       <div class="images-grid" id="images-grid" style="display:none"></div>
+      <div class="batch-results" id="batch-results" style="display:none"></div>
     </div>
 
   </main>
@@ -297,6 +330,7 @@
 <div id="toast-container"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="js/satellites.js"></script>
 <script src="js/app.js"></script>
 
