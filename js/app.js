@@ -26,7 +26,16 @@ const state = {
   cardAspect: 4 / 3,
 
   compareMode: 'slider',
+
+  // Batch sites — trace the same timeline across many locations at once
+  sites: [],                     // [{id, label, center:[lat,lng], bbox, sourceType:'point'|'rectangle'|'polygon', loadedSlots:[]}]
+  siteIdCounter: 0,
+  siteRadiusMeters: 300,         // default AOI size for point-only sites
+  batchRunning: false,
+  viewMode: 'single',            // 'single' | 'batch' — which results container is shown
 };
+
+const MAX_BATCH_SITES = 30;
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -168,6 +177,160 @@ function clearAoi() {
   document.getElementById('lat-input').value = '';
   document.getElementById('lng-input').value = '';
   updateViewportOutline();
+}
+
+// ── Batch Sites ────────────────────────────────────────────────────────────────
+// Approximate a square bbox of the given radius (meters) around a point.
+// Good enough for "default AOI around a point" purposes — not geodesically exact.
+function bboxFromPoint(lat, lng, radiusMeters) {
+  const latSpan = radiusMeters / 111320;
+  const lonSpan = radiusMeters / (111320 * Math.cos(lat * Math.PI / 180));
+  return [
+    +(lng - lonSpan).toFixed(6), +(lat - latSpan).toFixed(6),
+    +(lng + lonSpan).toFixed(6), +(lat + latSpan).toFixed(6),
+  ];
+}
+
+function getSiteById(id) {
+  return state.sites.find(s => s.id === id);
+}
+
+function addSite({ label, center, bbox, sourceType }) {
+  if (state.sites.length >= MAX_BATCH_SITES) {
+    showToast(`Batch is capped at ${MAX_BATCH_SITES} sites.`, 'warning', 5000);
+    return null;
+  }
+  const id = ++state.siteIdCounter;
+  const site = {
+    id,
+    label: label || `Site ${state.sites.length + 1}`,
+    center,
+    bbox,
+    sourceType, // 'point' | 'rectangle' | 'polygon'
+    loadedSlots: [],
+  };
+  state.sites.push(site);
+  renderSiteList();
+  return site;
+}
+
+function removeSite(id) {
+  if (state.batchRunning) return;
+  state.sites = state.sites.filter(s => s.id !== id);
+  renderSiteList();
+}
+
+function renderSiteList() {
+  const list = document.getElementById('site-list');
+  document.getElementById('site-count').textContent = `${state.sites.length} site${state.sites.length !== 1 ? 's' : ''}`;
+
+  const runBtn = document.getElementById('run-batch-btn');
+  runBtn.disabled = state.sites.length === 0 || state.batchRunning;
+  document.getElementById('batch-count-label').textContent = state.sites.length;
+
+  list.innerHTML = state.sites.map(site => {
+    const meta = site.sourceType === 'polygon'
+      ? 'Polygon area'
+      : site.sourceType === 'rectangle'
+        ? 'Custom area'
+        : `${site.center[0].toFixed(4)}, ${site.center[1].toFixed(4)}`;
+    return `
+      <div class="site-row" data-id="${site.id}">
+        <span class="site-row-icon">${site.sourceType === 'polygon' ? '▱' : '📍'}</span>
+        <div class="site-row-main">
+          <input type="text" class="site-label-input" value="${escHtml(site.label)}">
+          <span class="site-row-meta">${meta}</span>
+        </div>
+        <button class="btn-icon site-remove-btn" title="Remove site" ${state.batchRunning ? 'disabled' : ''}>✕</button>
+      </div>`;
+  }).join('');
+
+  list.querySelectorAll('.site-row').forEach(row => {
+    const id = +row.dataset.id;
+    row.querySelector('.site-label-input').addEventListener('change', e => {
+      const site = getSiteById(id);
+      if (site) site.label = e.target.value.trim() || site.label;
+    });
+    row.querySelector('.site-remove-btn').addEventListener('click', () => removeSite(id));
+  });
+}
+
+// Flattens all coordinate rings of a Polygon/MultiPolygon into a [minLon,minLat,maxLon,maxLat] bbox.
+function bboxFromPolygonCoords(geometry) {
+  const rings = geometry.type === 'MultiPolygon'
+    ? geometry.coordinates.flat()
+    : geometry.coordinates;
+  let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+  for (const ring of rings) {
+    for (const [lon, lat] of ring) {
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+  }
+  return [minLon, minLat, maxLon, maxLat];
+}
+
+function parseAndImportGeoJson(fileText) {
+  let data;
+  try {
+    data = JSON.parse(fileText);
+  } catch {
+    showToast('Could not parse file — check it is valid GeoJSON.', 'error');
+    return;
+  }
+
+  const features = data?.features;
+  if (!Array.isArray(features) || !features.length) {
+    showToast('No features found in that GeoJSON file.', 'error');
+    return;
+  }
+
+  const remainingCapacity = MAX_BATCH_SITES - state.sites.length;
+  const truncated = features.length > remainingCapacity;
+  let imported = 0;
+
+  for (const feature of features.slice(0, remainingCapacity)) {
+    const geom = feature?.geometry;
+    if (!geom) continue;
+    const label = feature.properties?.name || feature.properties?.label || feature.properties?.title || null;
+
+    let site = null;
+    if (geom.type === 'Point') {
+      const [lng, lat] = geom.coordinates;
+      site = addSite({
+        label,
+        center: [lat, lng],
+        bbox: bboxFromPoint(lat, lng, state.siteRadiusMeters),
+        sourceType: 'point',
+      });
+    } else if (geom.type === 'Polygon' || geom.type === 'MultiPolygon') {
+      const [minLon, minLat, maxLon, maxLat] = bboxFromPolygonCoords(geom);
+      site = addSite({
+        label,
+        center: [(minLat + maxLat) / 2, (minLon + maxLon) / 2],
+        bbox: [minLon, minLat, maxLon, maxLat],
+        sourceType: 'polygon',
+      });
+    }
+    if (site) imported++;
+  }
+
+  if (!imported) {
+    showToast(
+      remainingCapacity <= 0
+        ? `Batch is already at the ${MAX_BATCH_SITES}-site limit.`
+        : 'No Point or Polygon features found in that file.',
+      'error'
+    );
+    return;
+  }
+  showToast(
+    `Imported ${imported} site${imported !== 1 ? 's' : ''}.` +
+    (truncated ? ` The batch limit is ${MAX_BATCH_SITES} sites — the rest of the file was skipped.` : ''),
+    'success', 6000
+  );
 }
 
 // ── Timeline Slots ─────────────────────────────────────────────────────────────
@@ -550,8 +713,8 @@ async function loadImages() {
   );
 }
 
-function setCardImage(idx, { url, usedDate, requestedDate, hasGaps, usedZoom, requestedZoom }) {
-  const card = document.querySelector(`.image-card[data-index="${idx}"]`);
+function setCardImage(idx, { url, usedDate, requestedDate, hasGaps, usedZoom, requestedZoom }, siteId = null) {
+  const card = document.querySelector(`.image-card[data-site="${siteId ?? ''}"][data-index="${idx}"]`);
   if (!card) return;
   const img       = card.querySelector('.card-image');
   const loading   = card.querySelector('.card-img-loading');
@@ -605,9 +768,11 @@ function setCardImage(idx, { url, usedDate, requestedDate, hasGaps, usedZoom, re
 
 // ── Image Grid ─────────────────────────────────────────────────────────────────
 function renderImageGrid() {
+  state.viewMode = 'single';
   const grid  = document.getElementById('images-grid');
   const empty = document.getElementById('empty-state');
 
+  document.getElementById('batch-results').style.display = 'none';
   empty.style.display = 'none';
   grid.style.display  = 'grid';
   grid.style.gridTemplateColumns = `repeat(${state.gridCols}, 1fr)`;
@@ -620,10 +785,11 @@ function renderImageGrid() {
   updateCompareSelects();
 }
 
-function buildImageCard(slot, idx) {
+function buildImageCard(slot, idx, siteId = null) {
   const card = document.createElement('div');
   card.className = 'image-card';
   card.dataset.index = idx;
+  card.dataset.site = siteId ?? '';
   card.style.setProperty('--card-delay', `${idx * 55}ms`);
 
   const headerClass = getSlotLabelClass(slot.label);
@@ -670,22 +836,22 @@ function buildImageCard(slot, idx) {
   card.querySelectorAll('.card-action-btn').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
-      if (btn.dataset.action === 'expand')   expandImage(idx);
-      if (btn.dataset.action === 'download') downloadImage(state.loadedSlots[idx].imageUrl, filename);
+      if (btn.dataset.action === 'expand')   expandImage(idx, siteId);
+      if (btn.dataset.action === 'download') downloadImage(slot.imageUrl, filename);
     });
   });
 
   card.querySelector('.card-dl-btn').addEventListener('click', e => {
     e.stopPropagation();
     const quality = card.querySelector('.card-quality-select').value;
-    restitchAndDownload(idx, quality);
+    restitchAndDownload(idx, quality, siteId);
   });
 
   return card;
 }
 
-function expandImage(idx) {
-  const slot = state.loadedSlots[idx];
+function expandImage(idx, siteId = null) {
+  const slot = siteId != null ? getSiteById(siteId)?.loadedSlots[idx] : state.loadedSlots[idx];
   if (!slot?.imageUrl) return;
   document.getElementById('expand-img').src = slot.imageUrl;
   const zoomPart = slot.usedZoom ? ` — Zoom ${slot.usedZoom}` : '';
@@ -698,8 +864,8 @@ function expandImage(idx) {
 // Always traces down to the highest zoom this date/location actually has full
 // coverage at (via _stitchWayback's built-in fallback search), so a download
 // gets the best resolution the archive can offer — not just the map's current zoom.
-async function restitchAndDownload(slotIdx, quality) {
-  const slot = state.loadedSlots[slotIdx];
+async function restitchAndDownload(slotIdx, quality, siteId = null) {
+  const slot = siteId != null ? getSiteById(siteId)?.loadedSlots[slotIdx] : state.loadedSlots[slotIdx];
   if (!slot) return;
   showToast(`Re-stitching at ${quality} quality…`, 'info', 6000);
   const result = await _stitchWayback(slot.bbox, slot.date, qualityToMaxDim(quality));
@@ -744,6 +910,118 @@ async function downloadAllImages() {
       `EarthWatch_${slot.label.replace(/\s+/g, '_')}_${slot.date}${zoomPart}.jpg`
     );
     await new Promise(r => setTimeout(r, 500));
+  }
+}
+
+// ── Batch Run ──────────────────────────────────────────────────────────────────
+async function runWithConcurrencyLimit(items, limit, worker) {
+  let i = 0;
+  const run = async () => { while (i < items.length) { const idx = i++; await worker(items[idx], idx); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+}
+
+async function runBatch() {
+  if (state.batchRunning) return;
+  if (state.sites.length === 0) { showToast('Add at least one site first.', 'error'); return; }
+  if (state.slots.length === 0) { showToast('Add at least one date to the timeline.', 'error'); return; }
+  if (state.slots.some(s => !s.date)) { showToast('Fill in all dates in the timeline.', 'error'); return; }
+
+  const [arW, arH] = aspectRatioParts(state.aspectRatio);
+  state.cardAspect = arW / arH;
+
+  state.batchRunning = true;
+  document.getElementById('export-batch-zip-btn').disabled = true;
+  renderSiteList(); // disables run/remove controls while running
+
+  state.sites.forEach(site => {
+    site.loadedSlots = state.slots.map((slot, i) => ({ ...slot, imageUrl: '', bbox: [...site.bbox], index: i }));
+  });
+
+  renderBatchResults();
+  document.getElementById('images-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  await runWithConcurrencyLimit(state.sites, 3, async site => {
+    await Promise.all(
+      site.loadedSlots.map(async (slot, i) => {
+        const { url, usedDate, usedZoom, requestedZoom, failedTiles, totalTiles } =
+          await resolveImageUrl(slot, site.bbox);
+        slot.imageUrl = url || '';
+        slot.usedDate = usedDate;
+        slot.usedZoom = usedZoom;
+        slot.requestedZoom = requestedZoom;
+        slot.hasGaps  = !!(failedTiles && totalTiles);
+        setCardImage(i, { url, usedDate, requestedDate: slot.date, hasGaps: slot.hasGaps, usedZoom, requestedZoom }, site.id);
+      })
+    );
+  });
+
+  state.batchRunning = false;
+  document.getElementById('export-batch-zip-btn').disabled = false;
+  renderSiteList();
+  showToast('Batch complete.', 'success');
+}
+
+function siteMetaText(site) {
+  if (site.sourceType === 'polygon') return 'Polygon area';
+  if (site.sourceType === 'rectangle') return 'Custom area';
+  return `${site.center[0].toFixed(4)}, ${site.center[1].toFixed(4)}`;
+}
+
+function renderBatchResults() {
+  state.viewMode = 'batch';
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('images-grid').style.display  = 'none';
+
+  const container = document.getElementById('batch-results');
+  container.style.display = 'flex';
+  container.innerHTML = '';
+
+  document.getElementById('image-count').textContent =
+    `${state.sites.length} site${state.sites.length !== 1 ? 's' : ''} × ${state.slots.length} date${state.slots.length !== 1 ? 's' : ''}`;
+
+  state.sites.forEach(site => {
+    const section = document.createElement('section');
+    section.className = 'site-group';
+    section.innerHTML = `
+      <div class="site-group-header">
+        <span class="site-group-title">📍 ${escHtml(site.label)}</span>
+        <span class="site-group-meta">${siteMetaText(site)}</span>
+      </div>
+      <div class="images-grid" style="display:grid;grid-template-columns:repeat(${state.gridCols}, 1fr)"></div>`;
+
+    const grid = section.querySelector('.images-grid');
+    site.loadedSlots.forEach((slot, idx) => grid.appendChild(buildImageCard(slot, idx, site.id)));
+    container.appendChild(section);
+  });
+}
+
+// ── Batch Export (ZIP) ───────────────────────────────────────────────────────────
+function sanitizeFilename(str) {
+  return (str || '').replace(/\s+/g, '_').replace(/[/\\:*?"<>|]/g, '');
+}
+
+async function downloadBatchZip() {
+  const sitesWithImages = state.sites.filter(s => s.loadedSlots.some(slot => slot.imageUrl));
+  if (!sitesWithImages.length) { showToast('No batch images to export yet — run the batch first.', 'error'); return; }
+
+  showToast('Preparing ZIP…', 'info', 8000);
+  try {
+    const zip = new JSZip();
+    for (const site of sitesWithImages) {
+      const folder = zip.folder(sanitizeFilename(site.label) || `site_${site.id}`);
+      for (const slot of site.loadedSlots) {
+        if (!slot.imageUrl) continue;
+        const blob = await (await fetch(slot.imageUrl)).blob();
+        const zoomPart = slot.usedZoom ? `_z${slot.usedZoom}` : '';
+        folder.file(`${sanitizeFilename(slot.label)}_${slot.date}${zoomPart}.jpg`, blob);
+      }
+    }
+    const content = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(content);
+    await downloadImage(url, `EarthWatch_Batch_${formatDate(new Date())}.zip`);
+    URL.revokeObjectURL(url);
+  } catch {
+    showToast('Could not build the ZIP file.', 'error');
   }
 }
 
@@ -1024,6 +1302,36 @@ function setupEventListeners() {
 
   document.getElementById('clear-aoi-btn').addEventListener('click', clearAoi);
 
+  // Batch sites — add current location
+  document.getElementById('add-current-as-site-btn').addEventListener('click', () => {
+    if (state.batchRunning) return;
+    const [lat, lng] = state.center;
+    const site = state.bbox
+      ? addSite({ center: [lat, lng], bbox: [...state.bbox], sourceType: 'rectangle' })
+      : addSite({
+          center: [lat, lng],
+          bbox: bboxFromPoint(lat, lng, Math.max(50, +document.getElementById('site-radius-input').value || state.siteRadiusMeters)),
+          sourceType: 'point',
+        });
+    if (site) showToast('Added as batch site.', 'success');
+  });
+
+  document.getElementById('site-radius-input').addEventListener('change', e => {
+    const v = +e.target.value;
+    if (v > 0) state.siteRadiusMeters = v;
+  });
+
+  // Batch sites — upload GeoJSON
+  document.getElementById('site-upload-input').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => parseAndImportGeoJson(reader.result);
+    reader.onerror = () => showToast('Could not read that file.', 'error');
+    reader.readAsText(file);
+    e.target.value = ''; // allow re-uploading the same file later
+  });
+
   // Viewport lock toggle
   document.querySelectorAll('#viewport-lock-btns .toggle-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1074,6 +1382,9 @@ function setupEventListeners() {
   document.getElementById('load-images-btn').addEventListener('click', loadImages);
   document.getElementById('compare-btn').addEventListener('click', openComparisonModal);
   document.getElementById('export-all-btn').addEventListener('click', downloadAllImages);
+
+  document.getElementById('run-batch-btn').addEventListener('click', runBatch);
+  document.getElementById('export-batch-zip-btn').addEventListener('click', downloadBatchZip);
 
   // About modal
   document.getElementById('about-btn').addEventListener('click', () =>
