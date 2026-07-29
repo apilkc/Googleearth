@@ -429,37 +429,49 @@ async function _findWaybackRelease(dateStr) {
   return best;
 }
 
-// Returns {canvas, usedDate, failedTiles, totalTiles} | {directUrl, usedDate} | null
+const MIN_IMAGERY_ZOOM = 12;
+
+// Returns {canvas, usedDate, usedZoom, requestedZoom, failedTiles, totalTiles}
+// | {directUrl, usedDate, usedZoom, requestedZoom} | null
 async function _stitchWayback(bbox, dateStr, maxDim = null) {
   const release = await _findWaybackRelease(dateStr);
   if (!release) return null;
 
   const mapZ = state.map ? state.map.getZoom() : 17;
   // Wayback's WMTS tile matrix nominally goes to level 23, but actual coverage
-  // at 22+ only exists for select high-density areas/dates. We attempt the
-  // fetch anyway and rely on the tile-gap detection below to flag it
-  // clearly when a location/date doesn't have imagery at that resolution,
-  // rather than pre-emptively capping everyone at a lower zoom.
+  // at 22+ only exists for select high-density areas/dates.
   const maxBasemapZoom = state.basemapLayer?.options?.maxZoom || 22;
   const MAX_IMAGERY_ZOOM = 22;
   const maxAvailZoom = Math.min(maxBasemapZoom, MAX_IMAGERY_ZOOM);
-  const zoom  = _bboxZoom(bbox, Math.min(maxAvailZoom, Math.max(mapZ, 10)));
+  const requestedZoom = _bboxZoom(bbox, Math.min(maxAvailZoom, Math.max(mapZ, 10)));
   const tileUrl = (x, y, z) =>
     `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS` +
     `/1.0.0/default028mm/MapServer/tile/${release.num}/${z}/${y}/${x}`;
 
-  const result = await _stitchToCanvas(bbox, tileUrl, zoom, {
+  const usedDate = release.date.toISOString().slice(0, 10);
+  const stitchOpts = {
     maxDim:      maxDim ?? qualityToMaxDim(state.imageQuality),
     aspectRatio: state.aspectRatio,
-  });
+  };
 
-  const usedDate = release.date.toISOString().slice(0, 10);
-  if (result) return { ...result, usedDate };
+  // Walk down from the requested zoom to find the highest resolution this
+  // date/location actually has full coverage at, instead of settling for
+  // whatever gappy result comes back at the top zoom.
+  let best = null;
+  for (let z = requestedZoom; z >= MIN_IMAGERY_ZOOM; z--) {
+    const result = await _stitchToCanvas(bbox, tileUrl, z, stitchOpts);
+    if (!result) continue; // no coverage at all at this zoom — try lower
+    if (!best || result.failedTiles < best.failedTiles) best = { ...result, usedZoom: z };
+    if (result.failedTiles === 0) break; // fully clean — this is the max usable zoom
+  }
 
-  // CORS fallback — serve center tile directly as <img> src
+  if (best) return { ...best, usedDate, requestedZoom };
+
+  // Total failure at every zoom tried — fall back to a direct tile URL
+  // at the originally requested zoom.
   const [ww, ss, ee, nn] = bbox;
-  const tx = _lon2tile((ww + ee) / 2, zoom), ty = _lat2tile((ss + nn) / 2, zoom);
-  return { directUrl: tileUrl(tx, ty, zoom), usedDate };
+  const tx = _lon2tile((ww + ee) / 2, requestedZoom), ty = _lat2tile((ss + nn) / 2, requestedZoom);
+  return { directUrl: tileUrl(tx, ty, requestedZoom), usedDate, usedZoom: requestedZoom, requestedZoom };
 }
 
 async function resolveImageUrl(slot, bbox) {
@@ -468,11 +480,20 @@ async function resolveImageUrl(slot, bbox) {
     return {
       url: result.canvas.toDataURL('image/jpeg', 0.88),
       usedDate: result.usedDate,
+      usedZoom: result.usedZoom,
+      requestedZoom: result.requestedZoom,
       failedTiles: result.failedTiles,
       totalTiles: result.totalTiles,
     };
   }
-  if (result?.directUrl) return { url: result.directUrl, usedDate: result.usedDate };
+  if (result?.directUrl) {
+    return {
+      url: result.directUrl,
+      usedDate: result.usedDate,
+      usedZoom: result.usedZoom,
+      requestedZoom: result.requestedZoom,
+    };
+  }
   showToast('Wayback archive unavailable for this date.', 'warning', 6000);
   return { url: null, usedDate: null };
 }
@@ -517,28 +538,44 @@ async function loadImages() {
 
   await Promise.all(
     state.loadedSlots.map(async (slot, i) => {
-      const { url, usedDate, failedTiles, totalTiles } = await resolveImageUrl(slot, activeBbox);
+      const { url, usedDate, usedZoom, requestedZoom, failedTiles, totalTiles } =
+        await resolveImageUrl(slot, activeBbox);
       slot.imageUrl = url || '';
       slot.usedDate = usedDate;
+      slot.usedZoom = usedZoom;
+      slot.requestedZoom = requestedZoom;
       slot.hasGaps  = !!(failedTiles && totalTiles);
-      setCardImage(i, url, usedDate, slot.date, slot.hasGaps);
+      setCardImage(i, { url, usedDate, requestedDate: slot.date, hasGaps: slot.hasGaps, usedZoom, requestedZoom });
     })
   );
 }
 
-function setCardImage(idx, url, usedDate, requestedDate, hasGaps) {
+function setCardImage(idx, { url, usedDate, requestedDate, hasGaps, usedZoom, requestedZoom }) {
   const card = document.querySelector(`.image-card[data-index="${idx}"]`);
   if (!card) return;
-  const img      = card.querySelector('.card-image');
-  const loading  = card.querySelector('.card-img-loading');
-  const noData   = card.querySelector('.card-no-data');
-  const dateEl   = card.querySelector('.card-date');
-  const gapBadge = card.querySelector('.card-gap-badge');
+  const img       = card.querySelector('.card-image');
+  const loading   = card.querySelector('.card-img-loading');
+  const noData    = card.querySelector('.card-no-data');
+  const dateEl    = card.querySelector('.card-date');
+  const gapBadge  = card.querySelector('.card-gap-badge');
+  const zoomBadge = card.querySelector('.card-zoom-badge');
 
   if (usedDate && dateEl && usedDate !== requestedDate) {
     dateEl.textContent = usedDate;
     dateEl.title = `Nearest available to ${requestedDate}`;
     dateEl.classList.add('date-adjusted');
+  }
+
+  if (zoomBadge && usedZoom) {
+    zoomBadge.textContent = `Z${usedZoom}`;
+    zoomBadge.style.display = 'inline-block';
+    if (requestedZoom && usedZoom < requestedZoom) {
+      zoomBadge.classList.add('zoom-limited');
+      zoomBadge.title = `Archive imagery for this date only traces up to zoom ${usedZoom} here — ` +
+        `no higher-resolution data available (map is at zoom ${requestedZoom}).`;
+    } else {
+      zoomBadge.title = `Traced at zoom ${usedZoom}, matching the current map zoom.`;
+    }
   }
 
   if (!url) {
@@ -595,7 +632,10 @@ function buildImageCard(slot, idx) {
   card.innerHTML = `
     <div class="card-header ${headerClass}">
       <span class="card-label">${escHtml(slot.label)}</span>
-      <span class="card-date">${slot.date}</span>
+      <span class="card-header-right">
+        <span class="card-zoom-badge" style="display:none"></span>
+        <span class="card-date">${slot.date}</span>
+      </span>
     </div>
     <div class="card-image-wrapper" style="aspect-ratio:${(state.cardAspect || 4/3).toFixed(4)}">
       <div class="card-img-loading">
@@ -648,12 +688,16 @@ function expandImage(idx) {
   const slot = state.loadedSlots[idx];
   if (!slot?.imageUrl) return;
   document.getElementById('expand-img').src = slot.imageUrl;
+  const zoomPart = slot.usedZoom ? ` — Zoom ${slot.usedZoom}` : '';
   document.getElementById('expand-title').textContent =
-    `${slot.label} — ${slot.usedDate || slot.date}`;
+    `${slot.label} — ${slot.usedDate || slot.date}${zoomPart}`;
   document.getElementById('expand-modal').style.display = 'flex';
 }
 
 // ── Per-card quality download ──────────────────────────────────────────────────
+// Always traces down to the highest zoom this date/location actually has full
+// coverage at (via _stitchWayback's built-in fallback search), so a download
+// gets the best resolution the archive can offer — not just the map's current zoom.
 async function restitchAndDownload(slotIdx, quality) {
   const slot = state.loadedSlots[slotIdx];
   if (!slot) return;
@@ -663,7 +707,10 @@ async function restitchAndDownload(slotIdx, quality) {
   const url = result.canvas
     ? result.canvas.toDataURL('image/jpeg', 0.92)
     : result.directUrl;
-  const filename = `EarthWatch_${slot.label.replace(/\s+/g, '_')}_${slot.date}_${quality}.jpg`;
+  if (result.usedZoom && result.requestedZoom && result.usedZoom < result.requestedZoom) {
+    showToast(`Archive traces up to zoom ${result.usedZoom} here — downloaded at its maximum available resolution.`, 'warning', 7000);
+  }
+  const filename = `EarthWatch_${slot.label.replace(/\s+/g, '_')}_${slot.date}_z${result.usedZoom}_${quality}.jpg`;
   downloadImage(url, filename);
 }
 
@@ -691,9 +738,10 @@ async function downloadImage(url, filename) {
 async function downloadAllImages() {
   for (let i = 0; i < state.loadedSlots.length; i++) {
     const slot = state.loadedSlots[i];
+    const zoomPart = slot.usedZoom ? `_z${slot.usedZoom}` : '';
     await downloadImage(
       slot.imageUrl,
-      `EarthWatch_${slot.label.replace(/\s+/g, '_')}_${slot.date}.jpg`
+      `EarthWatch_${slot.label.replace(/\s+/g, '_')}_${slot.date}${zoomPart}.jpg`
     );
     await new Promise(r => setTimeout(r, 500));
   }
