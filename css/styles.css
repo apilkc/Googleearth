@@ -649,6 +649,12 @@ input[type="range"]::-webkit-slider-thumb {
 .card-header.slot-post   { background: var(--post-dim);  color: var(--post); }
 .card-header.slot-neutral{ background: var(--surface2);  color: var(--text2); }
 
+.card-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .card-date {
   font-size: 10px;
   font-weight: 400;
@@ -658,6 +664,23 @@ input[type="range"]::-webkit-slider-thumb {
 
 .card-date.date-adjusted {
   text-decoration: underline dotted;
+  cursor: help;
+  opacity: 1;
+}
+
+.card-zoom-badge {
+  font-size: 9px;
+  font-weight: 700;
+  font-family: monospace;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  opacity: 0.85;
+}
+
+.card-zoom-badge.zoom-limited {
+  color: var(--warning);
+  background: rgba(210, 153, 34, 0.18);
   cursor: help;
   opacity: 1;
 }
