@@ -807,6 +807,7 @@ function applySliderSplit(pct) {
 // ── Location Search ────────────────────────────────────────────────────────────
 async function searchLocation(query) {
   if (!query.trim()) return;
+  closeSuggestions();
   try {
     showToast('Searching…', 'info');
     const res  = await fetch(
@@ -825,6 +826,69 @@ async function searchLocation(query) {
   } catch {
     showToast('Search failed.', 'error');
   }
+}
+
+// ── Location Search — Live Suggestions ────────────────────────────────────────
+let searchDebounceTimer  = null;
+let searchAbortController = null;
+let suggestionItems       = [];
+let activeSuggestionIndex = -1;
+
+async function fetchSuggestions(query) {
+  if (searchAbortController) searchAbortController.abort();
+  searchAbortController = new AbortController();
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6`,
+      { headers: { Accept: 'application/json' }, signal: searchAbortController.signal }
+    );
+    return await res.json();
+  } catch (e) {
+    if (e.name === 'AbortError') return null; // superseded by a newer keystroke
+    return [];
+  }
+}
+
+function renderSuggestions(items) {
+  const box = document.getElementById('search-suggestions');
+  suggestionItems = items || [];
+  activeSuggestionIndex = -1;
+  if (!suggestionItems.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  box.innerHTML = suggestionItems.map((item, i) => `
+    <div class="search-suggestion-item" data-index="${i}">
+      <span class="suggestion-icon">📍</span>
+      <span class="suggestion-text">${escHtml(item.display_name)}</span>
+    </div>
+  `).join('');
+  box.style.display = 'block';
+  box.querySelectorAll('.search-suggestion-item').forEach(el => {
+    el.addEventListener('click', () => selectSuggestion(+el.dataset.index));
+  });
+}
+
+function selectSuggestion(i) {
+  const item = suggestionItems[i];
+  if (!item) return;
+  const lat = parseFloat(item.lat), lng = parseFloat(item.lon);
+  state.map.setView([lat, lng], 14);
+  setLocation(lat, lng);
+  document.getElementById('location-search').value = item.display_name.split(',').slice(0, 2).join(',');
+  closeSuggestions();
+}
+
+function closeSuggestions() {
+  const box = document.getElementById('search-suggestions');
+  box.style.display = 'none';
+  box.innerHTML = '';
+  suggestionItems = [];
+  activeSuggestionIndex = -1;
+}
+
+function updateActiveSuggestion() {
+  document.querySelectorAll('.search-suggestion-item').forEach((el, i) => {
+    el.classList.toggle('active', i === activeSuggestionIndex);
+  });
 }
 
 // ── Live Settings Reload ──────────────────────────────────────────────────────
@@ -893,10 +957,41 @@ function escHtml(str) {
 // ── Event Listeners ────────────────────────────────────────────────────────────
 function setupEventListeners() {
   // Location search
+  const searchInput = document.getElementById('location-search');
   document.getElementById('search-btn').addEventListener('click', () =>
-    searchLocation(document.getElementById('location-search').value));
-  document.getElementById('location-search').addEventListener('keypress', e => {
-    if (e.key === 'Enter') searchLocation(e.target.value);
+    searchLocation(searchInput.value));
+
+  searchInput.addEventListener('input', e => {
+    const query = e.target.value.trim();
+    clearTimeout(searchDebounceTimer);
+    if (query.length < 3) { closeSuggestions(); return; }
+    searchDebounceTimer = setTimeout(async () => {
+      const items = await fetchSuggestions(query);
+      if (items !== null) renderSuggestions(items); // null = superseded, ignore
+    }, 350);
+  });
+
+  searchInput.addEventListener('keydown', e => {
+    const suggestionsOpen = suggestionItems.length > 0;
+    if (e.key === 'ArrowDown' && suggestionsOpen) {
+      e.preventDefault();
+      activeSuggestionIndex = Math.min(activeSuggestionIndex + 1, suggestionItems.length - 1);
+      updateActiveSuggestion();
+    } else if (e.key === 'ArrowUp' && suggestionsOpen) {
+      e.preventDefault();
+      activeSuggestionIndex = Math.max(activeSuggestionIndex - 1, 0);
+      updateActiveSuggestion();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (suggestionsOpen && activeSuggestionIndex >= 0) selectSuggestion(activeSuggestionIndex);
+      else searchLocation(e.target.value);
+    } else if (e.key === 'Escape') {
+      closeSuggestions();
+    }
+  });
+
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.input-group')) closeSuggestions();
   });
 
   // Go to coordinates
